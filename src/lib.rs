@@ -1,4 +1,5 @@
 use std::{
+    cell::UnsafeCell,
     os::raw::{c_char, c_int, c_void},
     ptr,
 };
@@ -159,33 +160,47 @@ static PARAMS: &[bindings::param_export_t] = &[
     bindings::param_export_t {
         name: cstr_lit!("accept"),
         type_: bindings::STR_PARAM,
-        param_pointer: unsafe { ACCEPT_PARAM.cast() },
+        param_pointer: ACCEPT_PARAM.as_mut().cast(),
     },
     bindings::param_export_t {
         name: cstr_lit!("accept_encoding"),
         type_: bindings::STR_PARAM,
-        param_pointer: unsafe { ACCEPT_ENCODING_PARAM.cast() },
+        param_pointer: ACCEPT_ENCODING_PARAM.as_mut().cast(),
     },
     bindings::param_export_t {
         name: cstr_lit!("accept_language"),
         type_: bindings::STR_PARAM,
-        param_pointer: unsafe { ACCEPT_LANGUAGE_PARAM.cast() },
+        param_pointer: ACCEPT_LANGUAGE_PARAM.as_mut().cast(),
     },
     bindings::param_export_t {
         name: cstr_lit!("support"),
         type_: bindings::STR_PARAM,
-        param_pointer: unsafe { SUPPORT_PARAM.cast() },
+        param_pointer: SUPPORT_PARAM.as_mut().cast(),
     },
     bindings::NULL_PARAM_EXPORT,
 ];
 
-// The use of `static mut` frequently indicates super-sketchy
-// code. This *definitely* requires that the plugin is only used in a
-// single-threaded fashion.
-static mut ACCEPT_PARAM: *mut c_char = ptr::null_mut();
-static mut ACCEPT_ENCODING_PARAM: *mut c_char = ptr::null_mut();
-static mut ACCEPT_LANGUAGE_PARAM: *mut c_char = ptr::null_mut();
-static mut SUPPORT_PARAM: *mut c_char = ptr::null_mut();
+static ACCEPT_PARAM: GlobalStrParam = GlobalStrParam::new();
+static ACCEPT_ENCODING_PARAM: GlobalStrParam = GlobalStrParam::new();
+static ACCEPT_LANGUAGE_PARAM: GlobalStrParam = GlobalStrParam::new();
+static SUPPORT_PARAM: GlobalStrParam = GlobalStrParam::new();
+
+#[repr(C)]
+struct GlobalStrParam(UnsafeCell<*mut c_char>);
+
+// This *requires* that the plugin is only used in a single-threaded
+// fashion.
+unsafe impl Sync for GlobalStrParam {}
+
+impl GlobalStrParam {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(ptr::null_mut()))
+    }
+
+    const fn as_mut(&self) -> *mut *mut c_char {
+        self.0.get()
+    }
+}
 
 unsafe extern "C" fn mod_init() -> c_int {
     // TODO: Implement body here
