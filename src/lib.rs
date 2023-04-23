@@ -66,6 +66,7 @@ mod bindings {
     // can only use it with a compile-time known length (which is all
     // we need for now).
 
+    #[repr(C)]
     pub struct dep_export_concrete<const N: usize> {
         pub md: [module_dependency_t; 10usize],
         pub mpd: [modparam_dependency_t; N],
