@@ -36,7 +36,7 @@ mod bindings {
     // so we might as well make those easy to create.
 
     pub const NULL_MODULE_DEPENDENCY: module_dependency = module_dependency {
-        mod_type: module_type_MOD_TYPE_NULL,
+        mod_type: module_type::MOD_TYPE_NULL,
         mod_name: ptr::null_mut(),
         type_: 0,
     };
@@ -97,7 +97,7 @@ macro_rules! cstr_lit {
 #[no_mangle]
 pub static exports: bindings::module_exports = bindings::module_exports {
     name: cstr_lit!("option"),
-    type_: bindings::module_type_MOD_TYPE_DEFAULT,
+    type_: bindings::module_type::MOD_TYPE_DEFAULT,
     version: cstr_lit!("1.0"),
     compile_flags: cstr_lit!("TODO: options module doesn't use this?"),
     dlflags: bindings::DEFAULT_DLFLAGS,
@@ -122,7 +122,7 @@ pub static exports: bindings::module_exports = bindings::module_exports {
 static DEPS: bindings::dep_export_concrete<1> = bindings::dep_export_concrete {
     md: [
         bindings::module_dependency {
-            mod_type: bindings::module_type_MOD_TYPE_DEFAULT,
+            mod_type: bindings::module_type::MOD_TYPE_DEFAULT,
             mod_name: cstr_lit!(mut "signaling"),
             type_: bindings::DEP_ABORT,
         },
@@ -144,9 +144,7 @@ static CMDS: &[bindings::cmd_export_t] = &[
         name: cstr_lit!("options_reply"),
         function: Some(opt_reply),
         params: [bindings::NULL_CMD_PARAM; 9],
-        // Odd that the types of the constant are mixed; perhaps can
-        // be fixed in bindgen?
-        flags: bindings::REQUEST_ROUTE as _,
+        flags: bindings::REQUEST_ROUTE,
     },
     bindings::cmd_export_t {
         name: ptr::null(),
