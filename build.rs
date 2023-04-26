@@ -8,8 +8,14 @@ use std::{env, path::PathBuf};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir: PathBuf = env::var_os("OUT_DIR").ok_or("OUT_DIR not set")?.into();
 
-    let bindings = builder()
-        .header("../opensips/sr_module.h")
+    let mut builder = builder();
+
+    if let Ok(src_dir) = env::var("OPENSIPS_SRC_DIR") {
+        builder = builder.clang_arg("-I").clang_arg(src_dir);
+    }
+
+    let bindings = builder
+        .header_contents("opensips_bindings.h", r#"#include "sr_module.h""#)
         // This has a duplicate definition
         .blocklist_item("IPPORT_RESERVED")
         // Modules look a bit nicer for enums
