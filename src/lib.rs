@@ -96,7 +96,7 @@ macro_rules! cstr_lit {
 
 #[no_mangle]
 pub static exports: bindings::module_exports = bindings::module_exports {
-    name: cstr_lit!("option"),
+    name: cstr_lit!("rust-experiment"),
     type_: bindings::module_type::MOD_TYPE_DEFAULT,
     version: cstr_lit!("1.0"),
     compile_flags: cstr_lit!("TODO: options module doesn't use this?"),
@@ -141,8 +141,8 @@ static DEPS: bindings::dep_export_concrete<1> = bindings::dep_export_concrete {
 
 static CMDS: &[bindings::cmd_export_t] = &[
     bindings::cmd_export_t {
-        name: cstr_lit!("options_reply"),
-        function: Some(opt_reply),
+        name: cstr_lit!("rust_experiment_reply"),
+        function: Some(rust_experiment_reply),
         params: [bindings::NULL_CMD_PARAM; 9],
         flags: bindings::REQUEST_ROUTE,
     },
@@ -205,7 +205,7 @@ unsafe extern "C" fn mod_init() -> c_int {
     0
 }
 
-unsafe extern "C" fn opt_reply(
+unsafe extern "C" fn rust_experiment_reply(
     _arg1: *mut bindings::sip_msg,
     _ctx: *mut c_void,
     _arg2: *mut c_void,
