@@ -98,8 +98,8 @@ macro_rules! cstr_lit {
 pub static exports: bindings::module_exports = bindings::module_exports {
     name: cstr_lit!("rust-experiment"),
     type_: bindings::module_type::MOD_TYPE_DEFAULT,
-    version: cstr_lit!("1.0"),
-    compile_flags: cstr_lit!("TODO: options module doesn't use this?"),
+    version: bindings::OPENSIPS_FULL_VERSION.as_ptr(),
+    compile_flags: bindings::OPENSIPS_COMPILE_FLAGS.as_ptr(),
     dlflags: bindings::DEFAULT_DLFLAGS,
     load_f: None,
     deps: DEPS.as_ptr(),

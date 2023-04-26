@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let bindings = builder
-        .header_contents("opensips_bindings.h", r#"#include "sr_module.h""#)
+        .header("opensips_bindings.h")
         // This has a duplicate definition
         .blocklist_item("IPPORT_RESERVED")
         // Modules look a bit nicer for enums
