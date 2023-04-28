@@ -27,12 +27,12 @@ mod bindings {
     // validated:
     //
     // 1. The data is never written to.
-    // 1. The modules are run in a single-threaded fashion.
+    // 2. The modules are run in a single-threaded fashion.
     unsafe impl Sync for module_exports {}
     unsafe impl Sync for dep_export_t {}
     unsafe impl Sync for cmd_export_t {}
 
-    // It appears opensips uses sentinel values fo terminate arrays,
+    // It appears opensips uses sentinel values to terminate arrays,
     // so we might as well make those easy to create.
 
     pub const NULL_MODULE_DEPENDENCY: module_dependency = module_dependency {
