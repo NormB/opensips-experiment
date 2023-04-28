@@ -29,10 +29,23 @@ mod bindings {
         // It seems like a mistake that some strings are marked as
         // mutable; this should be throughly checked.
         (mut $s:literal) => {
-            concat!($s, "\0").as_ptr() as *mut u8
+            concat!($s, "\0").as_ptr() as *mut c_char
         };
     }
     pub(crate) use cstr_lit;
+
+    macro_rules! str_lit {
+        ($s:literal) => {
+            bindings::str_ {
+                // It seems like a mistake that these strings are
+                // marked as mutable as they are used with constant
+                // data; likely the opensips types should be fixed.
+                s: $s.as_ptr() as *mut c_char,
+                len: $s.len().try_into().unwrap_or(0),
+            }
+        }
+    }
+    pub(crate) use str_lit;
 
     // Since we are placing this data as a `static`, Rust needs to
     // enforce that the data is OK to be used across multiple threads
@@ -114,7 +127,7 @@ mod bindings {
     }
 }
 
-use bindings::cstr_lit;
+use bindings::{cstr_lit, str_lit};
 
 #[no_mangle]
 pub static exports: bindings::module_exports = bindings::module_exports {
@@ -261,12 +274,7 @@ unsafe extern "C" fn reply(
     let msg = &mut *msg;
 
     let code = 200;
-    // TODO: Some nicer transform using Rust's `&str`?
-    let reason = bindings::str_ {
-        s: cstr_lit!(mut "OK"),
-        len: 2,
-    };
-    let opt_200_rpl = &reason;
+    let opt_200_rpl = &str_lit!("OK");
     let tag = ptr::null_mut();
 
     let reply = state.sigb.reply.expect("reply function pointer missing");
