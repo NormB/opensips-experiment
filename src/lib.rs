@@ -2,6 +2,7 @@ use std::{
     cell::UnsafeCell,
     os::raw::{c_char, c_int, c_void},
     ptr,
+    sync::RwLock,
 };
 
 mod bindings {
@@ -11,7 +12,8 @@ mod bindings {
     #![allow(improper_ctypes)]
     #![allow(non_snake_case)]
 
-    use core::ptr;
+    use core::{mem, ptr};
+    use std::os::raw::c_int;
 
     // This is the bindgen-created output...
 
@@ -93,6 +95,23 @@ mod bindings {
             (self as *const Self).cast()
         }
     }
+
+    // This is a `static inline` function which bindgen doesn't
+    // generate. Define it ourselves.
+    #[inline]
+    pub unsafe fn load_sig_api(sigb: *mut sig_binds) -> c_int {
+        // import the SL auto-loading function
+        let load_sig_raw = find_export(cstr_lit!("load_sig"), 0);
+        let load_sig: load_sig_f = mem::transmute(load_sig_raw);
+
+        let Some(load_sig) = load_sig else {
+            // TODO: LM_ERR("can't import load_sig\n");
+            return -1;
+        };
+
+        // let the auto-loading function load all TM stuff
+        load_sig(sigb)
+    }
 }
 
 use bindings::cstr_lit;
@@ -115,7 +134,7 @@ pub static exports: bindings::module_exports = bindings::module_exports {
     trans: ptr::null(),
     procs: ptr::null(),
     preinit_f: None,
-    init_f: Some(mod_init),
+    init_f: Some(init),
     response_f: None,
     destroy_f: None,
     init_child_f: None,
@@ -145,7 +164,7 @@ static DEPS: bindings::dep_export_concrete<1> = bindings::dep_export_concrete {
 static CMDS: &[bindings::cmd_export_t] = &[
     bindings::cmd_export_t {
         name: cstr_lit!("rust_experiment_reply"),
-        function: Some(rust_experiment_reply),
+        function: Some(reply),
         params: [bindings::NULL_CMD_PARAM; 9],
         flags: bindings::REQUEST_ROUTE,
     },
@@ -203,13 +222,29 @@ impl GlobalStrParam {
     }
 }
 
-unsafe extern "C" fn mod_init() -> c_int {
-    // TODO: Implement body here
+#[derive(Debug)]
+struct GlobalState {
+    sigb: bindings::sig_binds,
+}
+
+static STATE: RwLock<Option<GlobalState>> = RwLock::new(None);
+
+unsafe extern "C" fn init() -> c_int {
+    eprintln!("rust_experiment::init called");
+
+    let mut sigb = std::mem::zeroed();
+    bindings::load_sig_api(&mut sigb);
+
+    let mut state = STATE.write().expect("Lock poisoned");
+    assert!(state.is_none(), "Double-initializing the module");
+
+    *state = Some(GlobalState { sigb });
+
     0
 }
 
-unsafe extern "C" fn rust_experiment_reply(
-    _arg1: *mut bindings::sip_msg,
+unsafe extern "C" fn reply(
+    msg: *mut bindings::sip_msg,
     _ctx: *mut c_void,
     _arg2: *mut c_void,
     _arg3: *mut c_void,
@@ -219,6 +254,27 @@ unsafe extern "C" fn rust_experiment_reply(
     _arg7: *mut c_void,
     _arg8: *mut c_void,
 ) -> i32 {
-    // TODO: Implement body here
+    eprintln!("rust_experiment::reply called");
+
+    let state = STATE.read().expect("Lock poisoned");
+    let state = state.as_ref().expect("Not initialized");
+    let msg = &mut *msg;
+
+    let code = 200;
+    // TODO: Some nicer transform using Rust's `&str`?
+    let reason = bindings::str_ {
+        s: cstr_lit!(mut "OK"),
+        len: 2,
+    };
+    let opt_200_rpl = &reason;
+    let tag = ptr::null_mut();
+
+    let reply = state.sigb.reply.expect("reply function pointer missing");
+
+    if reply(msg, code, opt_200_rpl, tag) == -1 {
+        // TODO: LM_ERR("failed to send 200 via send_reply\n");
+        return -1;
+    }
+
     0
 }
