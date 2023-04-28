@@ -19,6 +19,19 @@ mod bindings {
 
     // ... and what follows are additions we've made
 
+    // C Strings are NUL-terminated
+    macro_rules! cstr_lit {
+        ($s:literal) => {
+            concat!($s, "\0").as_ptr()
+        };
+        // It seems like a mistake that some strings are marked as
+        // mutable; this should be throughly checked.
+        (mut $s:literal) => {
+            concat!($s, "\0").as_ptr() as *mut u8
+        };
+    }
+    pub(crate) use cstr_lit;
+
     // Since we are placing this data as a `static`, Rust needs to
     // enforce that the data is OK to be used across multiple threads
     // concurrently.
@@ -82,17 +95,7 @@ mod bindings {
     }
 }
 
-// C Strings are NUL-terminated
-macro_rules! cstr_lit {
-    ($s:literal) => {
-        concat!($s, "\0").as_ptr()
-    };
-    // It seems like a mistake that some strings are marked as
-    // mutable; this should be throughly checked.
-    (mut $s:literal) => {
-        concat!($s, "\0").as_ptr() as *mut u8
-    };
-}
+use bindings::cstr_lit;
 
 #[no_mangle]
 pub static exports: bindings::module_exports = bindings::module_exports {
