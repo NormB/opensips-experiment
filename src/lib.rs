@@ -63,6 +63,13 @@ mod bindings {
     // It appears opensips uses sentinel values to terminate arrays,
     // so we might as well make those easy to create.
 
+    pub const NULL_CMD_EXPORT: cmd_export_t = cmd_export_t {
+        name: ptr::null(),
+        function: None,
+        params: [NULL_CMD_PARAM; 9],
+        flags: 0,
+    };
+
     pub const NULL_MODULE_DEPENDENCY: module_dependency = module_dependency {
         mod_type: module_type::MOD_TYPE_NULL,
         mod_name: ptr::null_mut(),
@@ -181,12 +188,7 @@ static CMDS: &[bindings::cmd_export_t] = &[
         params: [bindings::NULL_CMD_PARAM; 9],
         flags: bindings::REQUEST_ROUTE,
     },
-    bindings::cmd_export_t {
-        name: ptr::null(),
-        function: None,
-        params: [bindings::NULL_CMD_PARAM; 9],
-        flags: 0,
-    },
+    bindings::NULL_CMD_EXPORT,
 ];
 
 static PARAMS: &[bindings::param_export_t] = &[
