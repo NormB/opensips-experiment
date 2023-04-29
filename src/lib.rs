@@ -132,6 +132,19 @@ mod bindings {
         // let the auto-loading function load all TM stuff
         load_sig(sigb)
     }
+
+    impl str_ {
+        pub fn try_as_str(&self) -> Result<&str, core::str::Utf8Error> {
+            let len = self.len.try_into().expect("TODO: report error");
+            // TODO: safety
+            let s = unsafe { core::slice::from_raw_parts(self.s, len) };
+            core::str::from_utf8(s)
+        }
+
+        pub fn as_str(&self) -> &str {
+            self.try_as_str().unwrap()
+        }
+    }
 }
 
 use bindings::{cstr_lit, str_lit};
