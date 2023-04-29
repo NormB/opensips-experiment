@@ -93,6 +93,25 @@ mod bindings {
         };
     }
 
+    unsafe impl Sync for mi_export_t {}
+
+    impl mi_export_t {
+        pub const NULL: Self = Self {
+            name: ptr::null_mut(),
+            help: ptr::null_mut(),
+            flags: 0,
+            init_f: None,
+            recipes: [mi_recipe_t::NULL; 48],
+        };
+    }
+
+    impl mi_recipe_t {
+        pub const NULL: Self = Self {
+            cmd: None,
+            params: [ptr::null_mut(); 10],
+        };
+    }
+
     // The `dep_export_t` structure uses a Flexible Array Member
     // (FAM). These are quite annoying to deal with. Here, I create a
     // parallel structure that uses a const generic array. This
