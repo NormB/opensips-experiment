@@ -150,6 +150,11 @@ mod bindings {
         load_sig(sigb)
     }
 
+    #[inline]
+    pub fn init_mi_result_ok() -> *mut mi_response_t {
+        unsafe { init_mi_result_string("OK".as_ptr(), 2) }
+    }
+
     impl str_ {
         pub fn try_as_str(&self) -> Result<&str, core::str::Utf8Error> {
             let len = self.len.try_into().expect("TODO: report error");
