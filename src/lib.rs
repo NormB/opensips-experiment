@@ -201,6 +201,30 @@ static CMDS: &[bindings::cmd_export_t] = &[
         params: [bindings::NULL_CMD_PARAM; 9],
         flags: bindings::REQUEST_ROUTE,
     },
+    bindings::cmd_export_t {
+        name: cstr_lit!("rust_experiment_test_str"),
+        function: Some(test_str),
+        params: [
+            bindings::cmd_param {
+                flags: bindings::CMD_PARAM_STR,
+                fixup: None,
+                free_fixup: None,
+            },
+            bindings::cmd_param {
+                flags: bindings::CMD_PARAM_STR,
+                fixup: None,
+                free_fixup: None,
+            },
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+        ],
+        flags: bindings::REQUEST_ROUTE,
+    },
     bindings::NULL_CMD_EXPORT,
 ];
 
@@ -300,4 +324,29 @@ unsafe extern "C" fn reply(
     }
 
     0
+}
+
+unsafe extern "C" fn test_str(
+    _msg: *mut bindings::sip_msg,
+    s1: *mut c_void,
+    s2: *mut c_void,
+    _arg3: *mut c_void,
+    _arg4: *mut c_void,
+    _arg5: *mut c_void,
+    _arg6: *mut c_void,
+    _arg7: *mut c_void,
+    _arg8: *mut c_void,
+) -> i32 {
+    eprintln!("rust_experiment::test_str called");
+
+    let s1 = s1.cast::<bindings::str_>();
+    let s2 = s2.cast::<bindings::str_>();
+
+    let s1 = &*s1;
+    let s2 = &*s2;
+
+    let s1 = s1.as_str();
+    let s2 = s2.as_str();
+
+    s1.contains(s2) as _
 }
