@@ -63,37 +63,47 @@ mod bindings {
     // It appears opensips uses sentinel values to terminate arrays,
     // so we might as well make those easy to create.
 
-    pub const NULL_CMD_EXPORT: cmd_export_t = cmd_export_t {
-        name: ptr::null(),
-        function: None,
-        params: [NULL_CMD_PARAM; 9],
-        flags: 0,
-    };
+    impl cmd_export_t {
+        pub const NULL: Self = Self {
+            name: ptr::null(),
+            function: None,
+            params: [cmd_param::NULL; 9],
+            flags: 0,
+        };
+    }
 
-    pub const NULL_MODULE_DEPENDENCY: module_dependency = module_dependency {
-        mod_type: module_type::MOD_TYPE_NULL,
-        mod_name: ptr::null_mut(),
-        type_: 0,
-    };
+    impl module_dependency {
+        pub const NULL: Self = Self {
+            mod_type: module_type::MOD_TYPE_NULL,
+            mod_name: ptr::null_mut(),
+            type_: 0,
+        };
+    }
 
-    pub const NULL_MODPARAM_DEPENDENCY: modparam_dependency_t = modparam_dependency_t {
-        script_param: ptr::null_mut(),
-        get_deps_f: None,
-    };
+    impl modparam_dependency_t {
+        pub const NULL: Self = Self {
+            script_param: ptr::null_mut(),
+            get_deps_f: None,
+        };
+    }
 
-    pub const NULL_CMD_PARAM: cmd_param = cmd_param {
-        flags: 0,
-        fixup: None,
-        free_fixup: None,
-    };
+    impl cmd_param {
+        pub const NULL: Self = Self {
+            flags: 0,
+            fixup: None,
+            free_fixup: None,
+        };
+    }
 
     unsafe impl Sync for param_export_t {}
 
-    pub const NULL_PARAM_EXPORT: param_export_t = param_export_t {
-        name: ptr::null(),
-        type_: 0,
-        param_pointer: ptr::null_mut(),
-    };
+    impl param_export_t {
+        pub const NULL: Self = Self {
+            name: ptr::null(),
+            type_: 0,
+            param_pointer: ptr::null_mut(),
+        };
+    }
 
     // The `dep_export_t` structure uses a Flexible Array Member
     // (FAM). These are quite annoying to deal with. Here, I create a
@@ -181,24 +191,24 @@ static DEPS: bindings::dep_export_concrete<1> = bindings::dep_export_concrete {
             mod_name: cstr_lit!(mut "signaling"),
             type_: bindings::DEP_ABORT,
         },
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
     ],
-    mpd: [bindings::NULL_MODPARAM_DEPENDENCY],
+    mpd: [bindings::modparam_dependency::NULL],
 };
 
 static CMDS: &[bindings::cmd_export_t] = &[
     bindings::cmd_export_t {
         name: cstr_lit!("rust_experiment_reply"),
         function: Some(reply),
-        params: [bindings::NULL_CMD_PARAM; 9],
+        params: [bindings::cmd_param::NULL; 9],
         flags: bindings::REQUEST_ROUTE,
     },
     bindings::cmd_export_t {
@@ -215,17 +225,17 @@ static CMDS: &[bindings::cmd_export_t] = &[
                 fixup: None,
                 free_fixup: None,
             },
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
+            bindings::cmd_param::NULL,
+            bindings::cmd_param::NULL,
+            bindings::cmd_param::NULL,
+            bindings::cmd_param::NULL,
+            bindings::cmd_param::NULL,
+            bindings::cmd_param::NULL,
+            bindings::cmd_param::NULL,
         ],
         flags: bindings::REQUEST_ROUTE,
     },
-    bindings::NULL_CMD_EXPORT,
+    bindings::cmd_export_t::NULL,
 ];
 
 static PARAMS: &[bindings::param_export_t] = &[
@@ -249,7 +259,7 @@ static PARAMS: &[bindings::param_export_t] = &[
         type_: bindings::STR_PARAM,
         param_pointer: SUPPORT_PARAM.as_mut().cast(),
     },
-    bindings::NULL_PARAM_EXPORT,
+    bindings::param_export_t::NULL,
 ];
 
 static ACCEPT_PARAM: GlobalStrParam = GlobalStrParam::new();
