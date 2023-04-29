@@ -2,6 +2,7 @@ use std::{
     cell::UnsafeCell,
     os::raw::{c_char, c_int, c_void},
     ptr,
+    sync::RwLock,
 };
 
 mod bindings {
@@ -11,13 +12,40 @@ mod bindings {
     #![allow(improper_ctypes)]
     #![allow(non_snake_case)]
 
-    use core::ptr;
+    use core::{mem, ptr};
+    use std::os::raw::c_int;
 
     // This is the bindgen-created output...
 
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
     // ... and what follows are additions we've made
+
+    // C Strings are NUL-terminated
+    macro_rules! cstr_lit {
+        ($s:literal) => {
+            concat!($s, "\0").as_ptr()
+        };
+        // It seems like a mistake that some strings are marked as
+        // mutable; this should be throughly checked.
+        (mut $s:literal) => {
+            concat!($s, "\0").as_ptr() as *mut c_char
+        };
+    }
+    pub(crate) use cstr_lit;
+
+    macro_rules! str_lit {
+        ($s:literal) => {
+            bindings::str_ {
+                // It seems like a mistake that these strings are
+                // marked as mutable as they are used with constant
+                // data; likely the opensips types should be fixed.
+                s: $s.as_ptr() as *mut c_char,
+                len: $s.len().try_into().unwrap_or(0),
+            }
+        }
+    }
+    pub(crate) use str_lit;
 
     // Since we are placing this data as a `static`, Rust needs to
     // enforce that the data is OK to be used across multiple threads
@@ -34,6 +62,13 @@ mod bindings {
 
     // It appears opensips uses sentinel values to terminate arrays,
     // so we might as well make those easy to create.
+
+    pub const NULL_CMD_EXPORT: cmd_export_t = cmd_export_t {
+        name: ptr::null(),
+        function: None,
+        params: [NULL_CMD_PARAM; 9],
+        flags: 0,
+    };
 
     pub const NULL_MODULE_DEPENDENCY: module_dependency = module_dependency {
         mod_type: module_type::MOD_TYPE_NULL,
@@ -80,19 +115,39 @@ mod bindings {
             (self as *const Self).cast()
         }
     }
+
+    // This is a `static inline` function which bindgen doesn't
+    // generate. Define it ourselves.
+    #[inline]
+    pub unsafe fn load_sig_api(sigb: *mut sig_binds) -> c_int {
+        // import the SL auto-loading function
+        let load_sig_raw = find_export(cstr_lit!("load_sig"), 0);
+        let load_sig: load_sig_f = mem::transmute(load_sig_raw);
+
+        let Some(load_sig) = load_sig else {
+            // TODO: LM_ERR("can't import load_sig\n");
+            return -1;
+        };
+
+        // let the auto-loading function load all TM stuff
+        load_sig(sigb)
+    }
+
+    impl str_ {
+        pub fn try_as_str(&self) -> Result<&str, core::str::Utf8Error> {
+            let len = self.len.try_into().expect("TODO: report error");
+            // TODO: safety
+            let s = unsafe { core::slice::from_raw_parts(self.s, len) };
+            core::str::from_utf8(s)
+        }
+
+        pub fn as_str(&self) -> &str {
+            self.try_as_str().unwrap()
+        }
+    }
 }
 
-// C Strings are NUL-terminated
-macro_rules! cstr_lit {
-    ($s:literal) => {
-        concat!($s, "\0").as_ptr()
-    };
-    // It seems like a mistake that some strings are marked as
-    // mutable; this should be throughly checked.
-    (mut $s:literal) => {
-        concat!($s, "\0").as_ptr() as *mut u8
-    };
-}
+use bindings::{cstr_lit, str_lit};
 
 #[no_mangle]
 pub static exports: bindings::module_exports = bindings::module_exports {
@@ -112,7 +167,7 @@ pub static exports: bindings::module_exports = bindings::module_exports {
     trans: ptr::null(),
     procs: ptr::null(),
     preinit_f: None,
-    init_f: Some(mod_init),
+    init_f: Some(init),
     response_f: None,
     destroy_f: None,
     init_child_f: None,
@@ -142,16 +197,35 @@ static DEPS: bindings::dep_export_concrete<1> = bindings::dep_export_concrete {
 static CMDS: &[bindings::cmd_export_t] = &[
     bindings::cmd_export_t {
         name: cstr_lit!("rust_experiment_reply"),
-        function: Some(rust_experiment_reply),
+        function: Some(reply),
         params: [bindings::NULL_CMD_PARAM; 9],
         flags: bindings::REQUEST_ROUTE,
     },
     bindings::cmd_export_t {
-        name: ptr::null(),
-        function: None,
-        params: [bindings::NULL_CMD_PARAM; 9],
-        flags: 0,
+        name: cstr_lit!("rust_experiment_test_str"),
+        function: Some(test_str),
+        params: [
+            bindings::cmd_param {
+                flags: bindings::CMD_PARAM_STR,
+                fixup: None,
+                free_fixup: None,
+            },
+            bindings::cmd_param {
+                flags: bindings::CMD_PARAM_STR,
+                fixup: None,
+                free_fixup: None,
+            },
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+            bindings::NULL_CMD_PARAM,
+        ],
+        flags: bindings::REQUEST_ROUTE,
     },
+    bindings::NULL_CMD_EXPORT,
 ];
 
 static PARAMS: &[bindings::param_export_t] = &[
@@ -200,13 +274,29 @@ impl GlobalStrParam {
     }
 }
 
-unsafe extern "C" fn mod_init() -> c_int {
-    // TODO: Implement body here
+#[derive(Debug)]
+struct GlobalState {
+    sigb: bindings::sig_binds,
+}
+
+static STATE: RwLock<Option<GlobalState>> = RwLock::new(None);
+
+unsafe extern "C" fn init() -> c_int {
+    eprintln!("rust_experiment::init called");
+
+    let mut sigb = std::mem::zeroed();
+    bindings::load_sig_api(&mut sigb);
+
+    let mut state = STATE.write().expect("Lock poisoned");
+    assert!(state.is_none(), "Double-initializing the module");
+
+    *state = Some(GlobalState { sigb });
+
     0
 }
 
-unsafe extern "C" fn rust_experiment_reply(
-    _arg1: *mut bindings::sip_msg,
+unsafe extern "C" fn reply(
+    msg: *mut bindings::sip_msg,
     _ctx: *mut c_void,
     _arg2: *mut c_void,
     _arg3: *mut c_void,
@@ -216,6 +306,47 @@ unsafe extern "C" fn rust_experiment_reply(
     _arg7: *mut c_void,
     _arg8: *mut c_void,
 ) -> i32 {
-    // TODO: Implement body here
+    eprintln!("rust_experiment::reply called");
+
+    let state = STATE.read().expect("Lock poisoned");
+    let state = state.as_ref().expect("Not initialized");
+    let msg = &mut *msg;
+
+    let code = 200;
+    let opt_200_rpl = &str_lit!("OK");
+    let tag = ptr::null_mut();
+
+    let reply = state.sigb.reply.expect("reply function pointer missing");
+
+    if reply(msg, code, opt_200_rpl, tag) == -1 {
+        // TODO: LM_ERR("failed to send 200 via send_reply\n");
+        return -1;
+    }
+
     0
+}
+
+unsafe extern "C" fn test_str(
+    _msg: *mut bindings::sip_msg,
+    s1: *mut c_void,
+    s2: *mut c_void,
+    _arg3: *mut c_void,
+    _arg4: *mut c_void,
+    _arg5: *mut c_void,
+    _arg6: *mut c_void,
+    _arg7: *mut c_void,
+    _arg8: *mut c_void,
+) -> i32 {
+    eprintln!("rust_experiment::test_str called");
+
+    let s1 = s1.cast::<bindings::str_>();
+    let s2 = s2.cast::<bindings::str_>();
+
+    let s1 = &*s1;
+    let s2 = &*s2;
+
+    let s1 = s1.as_str();
+    let s2 = s2.as_str();
+
+    s1.contains(s2) as _
 }

@@ -50,7 +50,20 @@ impl ParseCallbacks for AdjustMacroTypes {
             "EVENT_ROUTE",
         ];
 
-        if cmd_flag_macro_names.iter().any(|&n| n == name) {
+        let cmd_param_macro_names = [
+            "CMD_PARAM_INT",
+            "CMD_PARAM_STR",
+            "CMD_PARAM_VAR",
+            "CMD_PARAM_REGEX",
+            "CMD_PARAM_OPT",
+            "CMD_PARAM_FIX_NULL",
+            "CMD_PARAM_NO_EXPAND",
+            "CMD_PARAM_STATIC",
+        ];
+
+        if cmd_flag_macro_names.contains(&name) {
+            Some(IntKind::Int)
+        } else if cmd_param_macro_names.contains(&name) {
             Some(IntKind::Int)
         } else {
             None

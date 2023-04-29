@@ -42,3 +42,4 @@
 #define HAVE_SELECT
 
 #include "sr_module.h"
+#include "modules/signaling/signaling.h"
