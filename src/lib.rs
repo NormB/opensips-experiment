@@ -1,5 +1,6 @@
 use std::{
     cell::UnsafeCell,
+    ffi::CStr,
     os::raw::{c_char, c_int, c_void},
     ptr,
     sync::RwLock,
@@ -13,7 +14,7 @@ mod bindings {
     #![allow(non_snake_case)]
 
     use core::{mem, ptr};
-    use std::os::raw::c_int;
+    use std::os::raw::{c_char, c_int};
 
     // This is the bindgen-created output...
 
@@ -34,19 +35,6 @@ mod bindings {
     }
     pub(crate) use cstr_lit;
 
-    macro_rules! str_lit {
-        ($s:literal) => {
-            bindings::str_ {
-                // It seems like a mistake that these strings are
-                // marked as mutable as they are used with constant
-                // data; likely the opensips types should be fixed.
-                s: $s.as_ptr() as *mut c_char,
-                len: $s.len().try_into().unwrap_or(0),
-            }
-        }
-    }
-    pub(crate) use str_lit;
-
     // Since we are placing this data as a `static`, Rust needs to
     // enforce that the data is OK to be used across multiple threads
     // concurrently.
@@ -63,37 +51,47 @@ mod bindings {
     // It appears opensips uses sentinel values to terminate arrays,
     // so we might as well make those easy to create.
 
-    pub const NULL_CMD_EXPORT: cmd_export_t = cmd_export_t {
-        name: ptr::null(),
-        function: None,
-        params: [NULL_CMD_PARAM; 9],
-        flags: 0,
-    };
+    impl cmd_export_t {
+        pub const NULL: Self = Self {
+            name: ptr::null(),
+            function: None,
+            params: [cmd_param::NULL; 9],
+            flags: 0,
+        };
+    }
 
-    pub const NULL_MODULE_DEPENDENCY: module_dependency = module_dependency {
-        mod_type: module_type::MOD_TYPE_NULL,
-        mod_name: ptr::null_mut(),
-        type_: 0,
-    };
+    impl module_dependency {
+        pub const NULL: Self = Self {
+            mod_type: module_type::MOD_TYPE_NULL,
+            mod_name: ptr::null_mut(),
+            type_: 0,
+        };
+    }
 
-    pub const NULL_MODPARAM_DEPENDENCY: modparam_dependency_t = modparam_dependency_t {
-        script_param: ptr::null_mut(),
-        get_deps_f: None,
-    };
+    impl modparam_dependency_t {
+        pub const NULL: Self = Self {
+            script_param: ptr::null_mut(),
+            get_deps_f: None,
+        };
+    }
 
-    pub const NULL_CMD_PARAM: cmd_param = cmd_param {
-        flags: 0,
-        fixup: None,
-        free_fixup: None,
-    };
+    impl cmd_param {
+        pub const NULL: Self = Self {
+            flags: 0,
+            fixup: None,
+            free_fixup: None,
+        };
+    }
 
     unsafe impl Sync for param_export_t {}
 
-    pub const NULL_PARAM_EXPORT: param_export_t = param_export_t {
-        name: ptr::null(),
-        type_: 0,
-        param_pointer: ptr::null_mut(),
-    };
+    impl param_export_t {
+        pub const NULL: Self = Self {
+            name: ptr::null(),
+            type_: 0,
+            param_pointer: ptr::null_mut(),
+        };
+    }
 
     // The `dep_export_t` structure uses a Flexible Array Member
     // (FAM). These are quite annoying to deal with. Here, I create a
@@ -145,9 +143,25 @@ mod bindings {
             self.try_as_str().unwrap()
         }
     }
+
+    pub trait StrExt {
+        fn as_opensips_str(&self) -> str_;
+    }
+
+    impl StrExt for str {
+        fn as_opensips_str(&self) -> str_ {
+            str_ {
+                // It seems like a mistake that these strings are
+                // marked as mutable as they are used with constant
+                // data; likely the opensips types should be fixed.
+                s: self.as_ptr() as *mut c_char,
+                len: self.len().try_into().unwrap_or(0),
+            }
+        }
+    }
 }
 
-use bindings::{cstr_lit, str_lit};
+use bindings::{cstr_lit, StrExt};
 
 #[no_mangle]
 pub static exports: bindings::module_exports = bindings::module_exports {
@@ -181,81 +195,85 @@ static DEPS: bindings::dep_export_concrete<1> = bindings::dep_export_concrete {
             mod_name: cstr_lit!(mut "signaling"),
             type_: bindings::DEP_ABORT,
         },
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
-        bindings::NULL_MODULE_DEPENDENCY,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
+        bindings::module_dependency::NULL,
     ],
-    mpd: [bindings::NULL_MODPARAM_DEPENDENCY],
+    mpd: [bindings::modparam_dependency::NULL],
 };
 
 static CMDS: &[bindings::cmd_export_t] = &[
     bindings::cmd_export_t {
         name: cstr_lit!("rust_experiment_reply"),
         function: Some(reply),
-        params: [bindings::NULL_CMD_PARAM; 9],
+        params: [bindings::cmd_param::NULL; 9],
         flags: bindings::REQUEST_ROUTE,
     },
     bindings::cmd_export_t {
         name: cstr_lit!("rust_experiment_test_str"),
         function: Some(test_str),
-        params: [
-            bindings::cmd_param {
+        params: {
+            let mut params = [bindings::cmd_param::NULL; 9];
+            params[0] = bindings::cmd_param {
                 flags: bindings::CMD_PARAM_STR,
                 fixup: None,
                 free_fixup: None,
-            },
-            bindings::cmd_param {
+            };
+            params[1] = bindings::cmd_param {
                 flags: bindings::CMD_PARAM_STR,
                 fixup: None,
                 free_fixup: None,
-            },
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-            bindings::NULL_CMD_PARAM,
-        ],
+            };
+            params
+        },
         flags: bindings::REQUEST_ROUTE,
     },
-    bindings::NULL_CMD_EXPORT,
+    bindings::cmd_export_t::NULL,
 ];
 
 static PARAMS: &[bindings::param_export_t] = &[
     bindings::param_export_t {
-        name: cstr_lit!("accept"),
-        type_: bindings::STR_PARAM,
-        param_pointer: ACCEPT_PARAM.as_mut().cast(),
+        name: cstr_lit!("count"),
+        type_: bindings::INT_PARAM,
+        param_pointer: COUNT.as_mut().cast(),
     },
     bindings::param_export_t {
-        name: cstr_lit!("accept_encoding"),
+        name: cstr_lit!("name"),
         type_: bindings::STR_PARAM,
-        param_pointer: ACCEPT_ENCODING_PARAM.as_mut().cast(),
+        param_pointer: NAME.as_mut().cast(),
     },
-    bindings::param_export_t {
-        name: cstr_lit!("accept_language"),
-        type_: bindings::STR_PARAM,
-        param_pointer: ACCEPT_LANGUAGE_PARAM.as_mut().cast(),
-    },
-    bindings::param_export_t {
-        name: cstr_lit!("support"),
-        type_: bindings::STR_PARAM,
-        param_pointer: SUPPORT_PARAM.as_mut().cast(),
-    },
-    bindings::NULL_PARAM_EXPORT,
+    bindings::param_export_t::NULL,
 ];
 
-static ACCEPT_PARAM: GlobalStrParam = GlobalStrParam::new();
-static ACCEPT_ENCODING_PARAM: GlobalStrParam = GlobalStrParam::new();
-static ACCEPT_LANGUAGE_PARAM: GlobalStrParam = GlobalStrParam::new();
-static SUPPORT_PARAM: GlobalStrParam = GlobalStrParam::new();
+static COUNT: GlobalIntParam = GlobalIntParam::new();
+static NAME: GlobalStrParam = GlobalStrParam::new();
+
+#[repr(C)]
+struct GlobalIntParam(UnsafeCell<c_int>);
+
+// This *requires* that the plugin is only used in a single-threaded
+// fashion.
+unsafe impl Sync for GlobalIntParam {}
+
+impl GlobalIntParam {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(0))
+    }
+
+    fn get(&self) -> c_int {
+        unsafe { *self.0.get() }
+    }
+
+    const fn as_mut(&self) -> *mut c_int {
+        self.0.get()
+    }
+}
 
 #[repr(C)]
 struct GlobalStrParam(UnsafeCell<*mut c_char>);
@@ -269,6 +287,10 @@ impl GlobalStrParam {
         Self(UnsafeCell::new(ptr::null_mut()))
     }
 
+    fn get(&self) -> *mut c_char {
+        unsafe { *self.0.get() }
+    }
+
     const fn as_mut(&self) -> *mut *mut c_char {
         self.0.get()
     }
@@ -276,6 +298,8 @@ impl GlobalStrParam {
 
 #[derive(Debug)]
 struct GlobalState {
+    count: u32,
+    name: String,
     sigb: bindings::sig_binds,
 }
 
@@ -284,13 +308,20 @@ static STATE: RwLock<Option<GlobalState>> = RwLock::new(None);
 unsafe extern "C" fn init() -> c_int {
     eprintln!("rust_experiment::init called");
 
+    let count = COUNT.get();
+    let count = count.try_into().unwrap_or(0);
+
+    let name = NAME.get();
+    let name = CStr::from_ptr(name);
+    let name = name.to_string_lossy().into();
+
     let mut sigb = std::mem::zeroed();
     bindings::load_sig_api(&mut sigb);
 
     let mut state = STATE.write().expect("Lock poisoned");
     assert!(state.is_none(), "Double-initializing the module");
 
-    *state = Some(GlobalState { sigb });
+    *state = Some(GlobalState { count, name, sigb });
 
     0
 }
@@ -313,7 +344,8 @@ unsafe extern "C" fn reply(
     let msg = &mut *msg;
 
     let code = 200;
-    let opt_200_rpl = &str_lit!("OK");
+    let response = format!("OK ({} / {})", state.name, state.count);
+    let opt_200_rpl = &response.as_opensips_str();
     let tag = ptr::null_mut();
 
     let reply = state.sigb.reply.expect("reply function pointer missing");
