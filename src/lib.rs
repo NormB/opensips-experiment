@@ -189,22 +189,15 @@ pub static exports: bindings::module_exports = bindings::module_exports {
 };
 
 static DEPS: bindings::dep_export_concrete<1> = bindings::dep_export_concrete {
-    md: [
-        bindings::module_dependency {
+    md: {
+        let mut md = [bindings::module_dependency::NULL; 10];
+        md[0] = bindings::module_dependency {
             mod_type: bindings::module_type::MOD_TYPE_DEFAULT,
             mod_name: cstr_lit!(mut "signaling"),
             type_: bindings::DEP_ABORT,
-        },
-        bindings::module_dependency::NULL,
-        bindings::module_dependency::NULL,
-        bindings::module_dependency::NULL,
-        bindings::module_dependency::NULL,
-        bindings::module_dependency::NULL,
-        bindings::module_dependency::NULL,
-        bindings::module_dependency::NULL,
-        bindings::module_dependency::NULL,
-        bindings::module_dependency::NULL,
-    ],
+        };
+        md
+    },
     mpd: [bindings::modparam_dependency::NULL],
 };
 
