@@ -1,9 +1,19 @@
 use std::{
     cell::UnsafeCell,
     ffi::CStr,
+    fs::Permissions,
     os::raw::{c_char, c_int, c_void},
+    os::unix::fs::PermissionsExt,
     ptr,
     sync::RwLock,
+    thread,
+};
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{UnixListener, UnixStream},
+    select,
+    sync::{broadcast, mpsc},
 };
 
 mod bindings {
@@ -155,6 +165,11 @@ mod bindings {
         unsafe { init_mi_result_string("OK".as_ptr(), 2) }
     }
 
+    #[inline]
+    pub fn is_worker_proc(rank: c_int) -> bool {
+        rank >= 1
+    }
+
     impl str_ {
         pub fn try_as_str(&self) -> Result<&str, core::str::Utf8Error> {
             let len = self.len.try_into().expect("TODO: report error");
@@ -200,7 +215,7 @@ pub static exports: bindings::module_exports = bindings::module_exports {
     acmds: ptr::null(),
     params: PARAMS.as_ptr(),
     stats: ptr::null(),
-    mi_cmds: ptr::null(),
+    mi_cmds: MI_EXPORTS.as_ptr(),
     items: ptr::null(),
     trans: ptr::null(),
     procs: ptr::null(),
@@ -208,7 +223,7 @@ pub static exports: bindings::module_exports = bindings::module_exports {
     init_f: Some(init),
     response_f: None,
     destroy_f: None,
-    init_child_f: None,
+    init_child_f: Some(init_child),
     reload_ack_f: None,
 };
 
@@ -313,17 +328,37 @@ impl GlobalStrParam {
     }
 }
 
+static MI_EXPORTS: &[bindings::mi_export_t] = &[
+    bindings::mi_export_t {
+        name: cstr_lit!(mut "rust_experiment_control"),
+        help: cstr_lit!(mut ""),
+        flags: 0,
+        init_f: None,
+        recipes: {
+            let mut recipes = [bindings::mi_recipe_t::NULL; 48];
+            recipes[0] = bindings::mi_recipe_t {
+                cmd: Some(control),
+                params: [ptr::null_mut(); 10],
+            };
+            recipes
+        },
+    },
+    bindings::mi_export_t::NULL,
+];
+
 #[derive(Debug)]
 struct GlobalState {
     count: u32,
     name: String,
+    counter: u32,
     sigb: bindings::sig_binds,
+    parent_tx: Option<mpsc::Sender<()>>,
 }
 
 static STATE: RwLock<Option<GlobalState>> = RwLock::new(None);
 
 unsafe extern "C" fn init() -> c_int {
-    eprintln!("rust_experiment::init called");
+    eprintln!("rust_experiment::init called (PID {})", std::process::id());
 
     let count = COUNT.get();
     let count = count.try_into().unwrap_or(0);
@@ -338,9 +373,139 @@ unsafe extern "C" fn init() -> c_int {
     let mut state = STATE.write().expect("Lock poisoned");
     assert!(state.is_none(), "Double-initializing the module");
 
-    *state = Some(GlobalState { count, name, sigb });
+    *state = Some(GlobalState {
+        count,
+        name,
+        counter: 0,
+        sigb,
+        parent_tx: None,
+    });
+
+    // TODO: track the spawned thread
+    thread::spawn(run_server_loop);
 
     0
+}
+
+unsafe extern "C" fn init_child(rank: c_int) -> c_int {
+    eprintln!(
+        "rust_experiment::init_child called (PID {}, rank {rank})",
+        std::process::id()
+    );
+
+    let (tx, rx) = mpsc::channel(3);
+
+    // TODO: track the spawned thread
+    thread::spawn(|| run_worker_loop(rx));
+
+    let mut state = STATE.write().expect("Lock poisoned");
+    let mut state = state.as_mut().expect("State uninitialized");
+    state.parent_tx = Some(tx);
+
+    0
+}
+
+const CONTROL_SOCKET: &str = "/usr/local/etc/opensips/rust_experiment";
+
+#[tokio::main(flavor = "current_thread")]
+async fn run_server_loop() {
+    eprintln!(
+        "rust_experiment::run_server_loop called (PID {})",
+        std::process::id()
+    );
+
+    let listener = UnixListener::bind(CONTROL_SOCKET).unwrap();
+    // TODO: Find minimal appropriate permissions
+    fs::set_permissions(CONTROL_SOCKET, Permissions::from_mode(0o777))
+        .await
+        .unwrap();
+
+    let (tx, mut rx) = mpsc::channel(3);
+    let (b_tx, b_rx) = broadcast::channel(3);
+
+    loop {
+        select! {
+            connection = listener.accept() => {
+                match connection {
+                    Ok((stream, _addr)) => {
+                        eprintln!("rust_experiment::run_server_loop worker connected (PID {})", std::process::id());
+
+                        let tx = tx.clone();
+                        let b_rx = b_rx.resubscribe();
+
+                        // TODO: track the spawned task
+                        tokio::spawn(run_server_child(stream, tx, b_rx));
+                    }
+                    Err(err) => {
+                        eprintln!("{err}");
+                        eprintln!("{err:?}");
+                        break;
+                    }
+                }
+            }
+
+            Some(()) = rx.recv() => {
+                b_tx.send(()).unwrap();
+            }
+        }
+    }
+}
+
+async fn run_server_child(
+    mut stream: UnixStream,
+    tx: mpsc::Sender<()>,
+    mut b_rx: broadcast::Receiver<()>,
+) {
+    eprintln!(
+        "rust_experiment::run_server_child called (PID {})",
+        std::process::id()
+    );
+
+    let mut data = [0];
+
+    loop {
+        select! {
+            Ok(()) = b_rx.recv() => {
+                eprintln!("[{}] Got data from broadcast, sending to worker", std::process::id());
+                stream.write_all(&[42]).await.unwrap();
+            }
+
+            Ok(1) = stream.read_exact(&mut data) => {
+                eprintln!("[{}] Got data from worker, broadcasting...", std::process::id());
+                tx.send(()).await.unwrap();
+            }
+        }
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn run_worker_loop(mut rx: mpsc::Receiver<()>) {
+    eprintln!(
+        "rust_experiment::run_worker_loop called (PID {})",
+        std::process::id()
+    );
+
+    let mut stream = UnixStream::connect(CONTROL_SOCKET).await.unwrap();
+
+    let mut data = [0];
+
+    loop {
+        select! {
+            Some(()) = rx.recv() => {
+                eprintln!("[{}] Got data from channel, sending to parent...", std::process::id());
+                stream.write_all(&[42]).await.unwrap();
+            }
+
+            Ok(1) = stream.read_exact(&mut data) => {
+                eprintln!("[{}], Received data from parent... incrementing counter", std::process::id());
+
+                let mut state = STATE.write().expect("Lock poisoned");
+                let mut state = state.as_mut().expect("State uninitialized");
+                state.counter = state.counter.wrapping_add(1);
+                // unlock via drop
+            }
+        }
+    }
 }
 
 unsafe extern "C" fn reply(
@@ -354,14 +519,14 @@ unsafe extern "C" fn reply(
     _arg7: *mut c_void,
     _arg8: *mut c_void,
 ) -> i32 {
-    eprintln!("rust_experiment::reply called");
+    eprintln!("rust_experiment::reply called (PID {})", std::process::id());
 
     let state = STATE.read().expect("Lock poisoned");
     let state = state.as_ref().expect("Not initialized");
     let msg = &mut *msg;
 
     let code = 200;
-    let response = format!("OK ({} / {})", state.name, state.count);
+    let response = format!("OK ({} / {} / {})", state.name, state.count, state.counter);
     let opt_200_rpl = &response.as_opensips_str();
     let tag = ptr::null_mut();
 
@@ -386,7 +551,10 @@ unsafe extern "C" fn test_str(
     _arg7: *mut c_void,
     _arg8: *mut c_void,
 ) -> i32 {
-    eprintln!("rust_experiment::test_str called");
+    eprintln!(
+        "rust_experiment::test_str called (PID {})",
+        std::process::id()
+    );
 
     let s1 = s1.cast::<bindings::str_>();
     let s2 = s2.cast::<bindings::str_>();
@@ -398,4 +566,21 @@ unsafe extern "C" fn test_str(
     let s2 = s2.as_str();
 
     s1.contains(s2) as _
+}
+
+unsafe extern "C" fn control(
+    _params: *const bindings::mi_params_t,
+    _async_hdl: *mut bindings::mi_handler,
+) -> *mut bindings::mi_response_t {
+    eprintln!(
+        "rust_experiment::control called (PID {})",
+        std::process::id()
+    );
+
+    let state = STATE.read().expect("Lock poisoned");
+    let state = state.as_ref().expect("Not initialized");
+    let parent_tx = state.parent_tx.as_ref().expect("Can't talk to the network");
+    parent_tx.blocking_send(()).unwrap();
+
+    bindings::init_mi_result_ok()
 }
