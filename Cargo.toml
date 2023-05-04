@@ -9,6 +9,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+tokio = { version = "1.28.0", default-features = false, features = ["io-util", "net", "rt", "macros", "fs", "sync", "time"] }
 
 [build-dependencies]
 bindgen = "0.65.1"
