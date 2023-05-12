@@ -616,17 +616,30 @@ unsafe extern "C" fn reply(
 
     let location = location.unwrap_or("no location provided");
 
-    let code = 200;
-    let response = format!(
-        "OK ({} / {} / {} / {} / {})",
-        state.name, state.count, state.counter, state.dog_url, location
+    let mut x_rust_header = format!(
+        "X-Rust: ({} / {} / {} / {} / {})\n",
+        state.name, state.count, state.counter, state.dog_url, location,
     );
-    let opt_200_rpl = &response.as_opensips_str();
-    let tag = ptr::null_mut();
+
+    if bindings::add_lump_rpl(
+        msg,
+        x_rust_header.as_mut_ptr(),
+        x_rust_header.len().try_into().unwrap(),
+        bindings::LUMP_RPL_HDR | bindings::LUMP_RPL_NODUP | bindings::LUMP_RPL_NOFREE,
+    )
+    .is_null()
+    {
+        // TODO: error
+        return -1;
+    }
 
     let reply = state.sigb.reply.expect("reply function pointer missing");
 
-    if reply(msg, code, opt_200_rpl, tag) == -1 {
+    let code = 200;
+    let reason = &"OK".as_opensips_str();
+    let tag = ptr::null_mut();
+
+    if reply(msg, code, reason, tag) == -1 {
         // TODO: LM_ERR("failed to send 200 via send_reply\n");
         return -1;
     }
