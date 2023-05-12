@@ -1,4 +1,4 @@
-use opensips_bindings as bindings;
+use opensips::{cstr_lit, StrExt};
 use std::{
     cell::UnsafeCell,
     ffi::CStr,
@@ -20,15 +20,13 @@ use tokio::{
 
 mod chatgpt;
 
-use bindings::{cstr_lit, StrExt};
-
 #[no_mangle]
-pub static exports: bindings::module_exports = bindings::module_exports {
+pub static exports: opensips::module_exports = opensips::module_exports {
     name: cstr_lit!("rust-experiment"),
-    type_: bindings::module_type::MOD_TYPE_DEFAULT,
-    version: bindings::OPENSIPS_FULL_VERSION.as_ptr(),
-    compile_flags: bindings::OPENSIPS_COMPILE_FLAGS.as_ptr(),
-    dlflags: bindings::DEFAULT_DLFLAGS,
+    type_: opensips::module_type::MOD_TYPE_DEFAULT,
+    version: opensips::OPENSIPS_FULL_VERSION.as_ptr(),
+    compile_flags: opensips::OPENSIPS_COMPILE_FLAGS.as_ptr(),
+    dlflags: opensips::DEFAULT_DLFLAGS,
     load_f: None,
     deps: DEPS.as_ptr(),
     cmds: CMDS.as_ptr(),
@@ -47,65 +45,65 @@ pub static exports: bindings::module_exports = bindings::module_exports {
     reload_ack_f: None,
 };
 
-static DEPS: bindings::dep_export_concrete<1> = bindings::dep_export_concrete {
+static DEPS: opensips::dep_export_concrete<1> = opensips::dep_export_concrete {
     md: {
-        let mut md = [bindings::module_dependency::NULL; 10];
-        md[0] = bindings::module_dependency {
-            mod_type: bindings::module_type::MOD_TYPE_DEFAULT,
+        let mut md = [opensips::module_dependency::NULL; 10];
+        md[0] = opensips::module_dependency {
+            mod_type: opensips::module_type::MOD_TYPE_DEFAULT,
             mod_name: cstr_lit!(mut "signaling"),
-            type_: bindings::DEP_ABORT,
+            type_: opensips::DEP_ABORT,
         };
         md
     },
-    mpd: [bindings::modparam_dependency::NULL],
+    mpd: [opensips::modparam_dependency::NULL],
 };
 
-static CMDS: &[bindings::cmd_export_t] = &[
-    bindings::cmd_export_t {
+static CMDS: &[opensips::cmd_export_t] = &[
+    opensips::cmd_export_t {
         name: cstr_lit!("rust_experiment_reply"),
         function: Some(reply),
-        params: [bindings::cmd_param::NULL; 9],
-        flags: bindings::REQUEST_ROUTE,
+        params: [opensips::cmd_param::NULL; 9],
+        flags: opensips::REQUEST_ROUTE,
     },
-    bindings::cmd_export_t {
+    opensips::cmd_export_t {
         name: cstr_lit!("rust_experiment_test_str"),
         function: Some(test_str),
         params: {
-            let mut params = [bindings::cmd_param::NULL; 9];
-            params[0] = bindings::cmd_param {
-                flags: bindings::CMD_PARAM_STR,
+            let mut params = [opensips::cmd_param::NULL; 9];
+            params[0] = opensips::cmd_param {
+                flags: opensips::CMD_PARAM_STR,
                 fixup: None,
                 free_fixup: None,
             };
-            params[1] = bindings::cmd_param {
-                flags: bindings::CMD_PARAM_STR,
+            params[1] = opensips::cmd_param {
+                flags: opensips::CMD_PARAM_STR,
                 fixup: None,
                 free_fixup: None,
             };
             params
         },
-        flags: bindings::REQUEST_ROUTE,
+        flags: opensips::REQUEST_ROUTE,
     },
-    bindings::cmd_export_t::NULL,
+    opensips::cmd_export_t::NULL,
 ];
 
-static PARAMS: &[bindings::param_export_t] = &[
-    bindings::param_export_t {
+static PARAMS: &[opensips::param_export_t] = &[
+    opensips::param_export_t {
         name: cstr_lit!("count"),
-        type_: bindings::INT_PARAM,
+        type_: opensips::INT_PARAM,
         param_pointer: COUNT.as_mut().cast(),
     },
-    bindings::param_export_t {
+    opensips::param_export_t {
         name: cstr_lit!("name"),
-        type_: bindings::STR_PARAM,
+        type_: opensips::STR_PARAM,
         param_pointer: NAME.as_mut().cast(),
     },
-    bindings::param_export_t {
+    opensips::param_export_t {
         name: cstr_lit!("chatgpt-key"),
-        type_: bindings::STR_PARAM,
+        type_: opensips::STR_PARAM,
         param_pointer: CHATGPT_KEY.as_mut().cast(),
     },
-    bindings::param_export_t::NULL,
+    opensips::param_export_t::NULL,
 ];
 
 static COUNT: GlobalIntParam = GlobalIntParam::new();
@@ -154,22 +152,22 @@ impl GlobalStrParam {
     }
 }
 
-static MI_EXPORTS: &[bindings::mi_export_t] = &[
-    bindings::mi_export_t {
+static MI_EXPORTS: &[opensips::mi_export_t] = &[
+    opensips::mi_export_t {
         name: cstr_lit!(mut "rust_experiment_control"),
         help: cstr_lit!(mut ""),
         flags: 0,
         init_f: None,
         recipes: {
-            let mut recipes = [bindings::mi_recipe_t::NULL; 48];
-            recipes[0] = bindings::mi_recipe_t {
+            let mut recipes = [opensips::mi_recipe_t::NULL; 48];
+            recipes[0] = opensips::mi_recipe_t {
                 cmd: Some(control),
                 params: [ptr::null_mut(); 10],
             };
             recipes
         },
     },
-    bindings::mi_export_t::NULL,
+    opensips::mi_export_t::NULL,
 ];
 
 #[derive(Debug)]
@@ -178,7 +176,7 @@ struct GlobalState {
     name: String,
     counter: u32,
     dog_url: String,
-    sigb: bindings::sig_binds,
+    sigb: opensips::sig_binds,
     parent_tx: Option<mpsc::Sender<Message>>,
     chatgpt_key: String,
 }
@@ -200,7 +198,7 @@ unsafe extern "C" fn init() -> c_int {
     let chatgpt_key = chatgpt_key.to_string_lossy().into();
 
     let mut sigb = std::mem::zeroed();
-    bindings::load_sig_api(&mut sigb);
+    opensips::load_sig_api(&mut sigb);
 
     let mut state = STATE.write().expect("Lock poisoned");
     assert!(state.is_none(), "Double-initializing the module");
@@ -407,7 +405,7 @@ async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
 }
 
 unsafe extern "C" fn reply(
-    msg: *mut bindings::sip_msg,
+    msg: *mut opensips::sip_msg,
     _ctx: *mut c_void,
     _arg2: *mut c_void,
     _arg3: *mut c_void,
@@ -437,11 +435,11 @@ unsafe extern "C" fn reply(
         header.push_str(value);
         header.push_str("\n");
 
-        let lump = bindings::add_lump_rpl(
+        let lump = opensips::add_lump_rpl(
             msg,
             header.as_mut_ptr(),
             header.len().try_into().unwrap(),
-            bindings::LUMP_RPL_HDR | bindings::LUMP_RPL_NOFREE,
+            opensips::LUMP_RPL_HDR | opensips::LUMP_RPL_NOFREE,
         );
 
         !lump.is_null()
@@ -478,7 +476,7 @@ unsafe extern "C" fn reply(
 }
 
 unsafe extern "C" fn test_str(
-    _msg: *mut bindings::sip_msg,
+    _msg: *mut opensips::sip_msg,
     s1: *mut c_void,
     s2: *mut c_void,
     _arg3: *mut c_void,
@@ -493,8 +491,8 @@ unsafe extern "C" fn test_str(
         std::process::id()
     );
 
-    let s1 = s1.cast::<bindings::str_>();
-    let s2 = s2.cast::<bindings::str_>();
+    let s1 = s1.cast::<opensips::str_>();
+    let s2 = s2.cast::<opensips::str_>();
 
     let s1 = &*s1;
     let s2 = &*s2;
@@ -506,9 +504,9 @@ unsafe extern "C" fn test_str(
 }
 
 unsafe extern "C" fn control(
-    _params: *const bindings::mi_params_t,
-    _async_hdl: *mut bindings::mi_handler,
-) -> *mut bindings::mi_response_t {
+    _params: *const opensips::mi_params_t,
+    _async_hdl: *mut opensips::mi_handler,
+) -> *mut opensips::mi_response_t {
     eprintln!(
         "rust_experiment::control called (PID {})",
         std::process::id()
@@ -519,5 +517,5 @@ unsafe extern "C" fn control(
     let parent_tx = state.parent_tx.as_ref().expect("Can't talk to the network");
     parent_tx.blocking_send(Message::IncrementCounter).unwrap();
 
-    bindings::init_mi_result_ok()
+    opensips::init_mi_result_ok()
 }
