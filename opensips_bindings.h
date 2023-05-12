@@ -43,3 +43,4 @@
 
 #include "sr_module.h"
 #include "modules/signaling/signaling.h"
+#include "data_lump_rpl.h"

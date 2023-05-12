@@ -61,9 +61,18 @@ impl ParseCallbacks for AdjustMacroTypes {
             "CMD_PARAM_STATIC",
         ];
 
-        if cmd_flag_macro_names.contains(&name) {
-            Some(IntKind::Int)
-        } else if cmd_param_macro_names.contains(&name) {
+        let lump_rpl_macro_names = [
+            "LUMP_RPL_HDR",
+            "LUMP_RPL_BODY",
+            "LUMP_RPL_NODUP",
+            "LUMP_RPL_NOFREE",
+            "LUMP_RPL_SHMEM",
+        ];
+
+        if cmd_flag_macro_names.contains(&name)
+            || cmd_param_macro_names.contains(&name)
+            || lump_rpl_macro_names.contains(&name)
+        {
             Some(IntKind::Int)
         } else {
             None
