@@ -433,7 +433,7 @@ unsafe extern "C" fn reply(
         let mut header = String::from(name);
         header.push_str(": ");
         header.push_str(value);
-        header.push_str("\n");
+        header.push('\n');
 
         let lump = opensips::add_lump_rpl(
             msg,
