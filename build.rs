@@ -7,6 +7,7 @@ use std::{env, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir: PathBuf = env::var_os("OUT_DIR").ok_or("OUT_DIR not set")?.into();
+    let cargo_cfg_target_arch = env::var("CARGO_CFG_TARGET_ARCH")?;
 
     let mut builder = builder();
 
@@ -15,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let bindings = builder
+        .clang_arg(format!("-D CARGO_CFG_TARGET_ARCH__{cargo_cfg_target_arch}=1"))
         .header("opensips_bindings.h")
         // This has a duplicate definition
         .blocklist_item("IPPORT_RESERVED")

@@ -20,10 +20,8 @@
 #define HAVE_GENERICS
 #define NAME "opensips"
 #define VERSION "3.4.0-dev"
-#define ARCH "aarch64"
 #define OS "linux"
 #define COMPILER "gcc 11"
-#define __CPU_aarch64
 #define __OS_linux
 #define __SMP_yes
 #define CFG_DIR "/usr/local/etc/opensips/"
@@ -40,6 +38,13 @@
 #define HAVE_EPOLL
 #define HAVE_SIGIO_RT
 #define HAVE_SELECT
+
+#ifdef CARGO_CFG_TARGET_ARCH__aarch64
+  #define ARCH "aarch64"
+  #define __CPU_aarch64
+#else
+  #error "Unknown target architecture"
+#endif
 
 #include "sr_module.h"
 #include "modules/signaling/signaling.h"
