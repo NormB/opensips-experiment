@@ -7,6 +7,7 @@ use std::{
     ptr,
     sync::RwLock,
     thread,
+    time::Duration,
 };
 use tokio::{
     fs,
@@ -351,6 +352,7 @@ struct GlobalState {
     count: u32,
     name: String,
     counter: u32,
+    dog_url: String,
     sigb: bindings::sig_binds,
     parent_tx: Option<mpsc::Sender<Message>>,
 }
@@ -377,6 +379,7 @@ unsafe extern "C" fn init() -> c_int {
         count,
         name,
         counter: 0,
+        dog_url: "Dog URL not set yet".into(),
         sigb,
         parent_tx: None,
     });
@@ -408,6 +411,7 @@ unsafe extern "C" fn init_child(rank: c_int) -> c_int {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 enum Message {
     IncrementCounter,
+    NewDog(String),
 }
 
 const CONTROL_SOCKET: &str = "/usr/local/etc/opensips/rust_experiment";
@@ -427,6 +431,8 @@ async fn run_server_loop() {
 
     let (tx, mut rx) = mpsc::channel(3);
     let (b_tx, b_rx) = broadcast::channel(3);
+
+    tokio::spawn(run_api_task(tx.clone()));
 
     loop {
         select! {
@@ -453,6 +459,32 @@ async fn run_server_loop() {
                 b_tx.send(msg).unwrap();
             }
         }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RandomDogResponse {
+    // file_size_bytes: u64,
+    url: String,
+}
+
+async fn run_api_task(tx: mpsc::Sender<Message>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(10));
+
+    // Burn the first tick as we want to wait a bit before making the first request
+    interval.tick().await;
+
+    loop {
+        interval.tick().await;
+        let random_dog = reqwest::get("https://random.dog/woof.json")
+            .await
+            .expect("Could not make HTTP request")
+            .json::<RandomDogResponse>()
+            .await
+            .expect("Could not deserialize API response");
+
+        tx.send(Message::NewDog(random_dog.url)).await.unwrap();
     }
 }
 
@@ -530,6 +562,11 @@ async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
                         state.counter = state.counter.wrapping_add(1);
                         // unlock via drop
                     }
+                    Message::NewDog(url) => {
+                        let mut state = STATE.write().expect("Lock poisoned");
+                        let mut state = state.as_mut().expect("State uninitialized");
+                        state.dog_url = url;
+                    }
                 }
             }
         }
@@ -554,7 +591,10 @@ unsafe extern "C" fn reply(
     let msg = &mut *msg;
 
     let code = 200;
-    let response = format!("OK ({} / {} / {})", state.name, state.count, state.counter);
+    let response = format!(
+        "OK ({} / {} / {} / {})",
+        state.name, state.count, state.counter, state.dog_url
+    );
     let opt_200_rpl = &response.as_opensips_str();
     let tag = ptr::null_mut();
 
