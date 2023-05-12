@@ -217,6 +217,8 @@ mod bindings {
     }
 }
 
+mod chatgpt;
+
 use bindings::{cstr_lit, StrExt};
 
 #[no_mangle]
@@ -297,11 +299,17 @@ static PARAMS: &[bindings::param_export_t] = &[
         type_: bindings::STR_PARAM,
         param_pointer: NAME.as_mut().cast(),
     },
+    bindings::param_export_t {
+        name: cstr_lit!("chatgpt-key"),
+        type_: bindings::STR_PARAM,
+        param_pointer: CHATGPT_KEY.as_mut().cast(),
+    },
     bindings::param_export_t::NULL,
 ];
 
 static COUNT: GlobalIntParam = GlobalIntParam::new();
 static NAME: GlobalStrParam = GlobalStrParam::new();
+static CHATGPT_KEY: GlobalStrParam = GlobalStrParam::new();
 
 #[repr(C)]
 struct GlobalIntParam(UnsafeCell<c_int>);
@@ -371,6 +379,7 @@ struct GlobalState {
     dog_url: String,
     sigb: bindings::sig_binds,
     parent_tx: Option<mpsc::Sender<Message>>,
+    chatgpt_key: String,
 }
 
 static STATE: RwLock<Option<GlobalState>> = RwLock::new(None);
@@ -385,6 +394,10 @@ unsafe extern "C" fn init() -> c_int {
     let name = CStr::from_ptr(name);
     let name = name.to_string_lossy().into();
 
+    let chatgpt_key = CHATGPT_KEY.get();
+    let chatgpt_key = CStr::from_ptr(chatgpt_key);
+    let chatgpt_key = chatgpt_key.to_string_lossy().into();
+
     let mut sigb = std::mem::zeroed();
     bindings::load_sig_api(&mut sigb);
 
@@ -398,6 +411,7 @@ unsafe extern "C" fn init() -> c_int {
         dog_url: "Dog URL not set yet".into(),
         sigb,
         parent_tx: None,
+        chatgpt_key,
     });
 
     // TODO: track the spawned thread
@@ -608,29 +622,44 @@ unsafe extern "C" fn reply(
     let state = state.as_ref().expect("Not initialized");
     let msg = &mut *msg;
 
-    let location = msg
+    let chatgpt_query = msg
         .header_iter()
         .map(|h| (h.name.as_str(), h.body.as_str()))
-        .find(|(n, _b)| n.eq_ignore_ascii_case("X-Location"))
+        .find(|(n, _b)| n.eq_ignore_ascii_case("X-ChatGPT"))
         .map(|(_h, b)| b);
 
-    let location = location.unwrap_or("no location provided");
+    let chatgpt_response = chatgpt_query.map(|query| chatgpt::do_one(&state.chatgpt_key, query));
 
-    let mut x_rust_header = format!(
-        "X-Rust: ({} / {} / {} / {} / {})\n",
-        state.name, state.count, state.counter, state.dog_url, location,
+    let mut add_header = |name, value| {
+        let mut header = String::from(name);
+        header.push_str(": ");
+        header.push_str(value);
+        header.push_str("\n");
+
+        let lump = bindings::add_lump_rpl(
+            msg,
+            header.as_mut_ptr(),
+            header.len().try_into().unwrap(),
+            bindings::LUMP_RPL_HDR | bindings::LUMP_RPL_NOFREE,
+        );
+
+        !lump.is_null()
+    };
+
+    let rust_header_value = format!(
+        "{} / {} / {} / {}",
+        state.name, state.count, state.counter, state.dog_url
     );
-
-    if bindings::add_lump_rpl(
-        msg,
-        x_rust_header.as_mut_ptr(),
-        x_rust_header.len().try_into().unwrap(),
-        bindings::LUMP_RPL_HDR | bindings::LUMP_RPL_NODUP | bindings::LUMP_RPL_NOFREE,
-    )
-    .is_null()
-    {
+    if !add_header("X-Rust", &rust_header_value) {
         // TODO: error
         return -1;
+    }
+
+    if let Some(chatgpt_header_value) = chatgpt_response {
+        if !add_header("X-ChatGPT", &chatgpt_header_value) {
+            // TODO: error
+            return -1;
+        }
     }
 
     let reply = state.sigb.reply.expect("reply function pointer missing");
