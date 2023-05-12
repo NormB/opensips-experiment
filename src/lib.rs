@@ -199,6 +199,22 @@ mod bindings {
             }
         }
     }
+
+    impl sip_msg {
+        pub unsafe fn header_iter(&self) -> impl Iterator<Item = &hdr_field> {
+            std::iter::from_fn({
+                let mut head_raw = self.headers;
+
+                move || {
+                    let head = head_raw.as_ref();
+                    if let Some(head) = head {
+                        head_raw = head.next;
+                    }
+                    head
+                }
+            })
+        }
+    }
 }
 
 use bindings::{cstr_lit, StrExt};
@@ -592,10 +608,18 @@ unsafe extern "C" fn reply(
     let state = state.as_ref().expect("Not initialized");
     let msg = &mut *msg;
 
+    let location = msg
+        .header_iter()
+        .map(|h| (h.name.as_str(), h.body.as_str()))
+        .find(|(n, _b)| n.eq_ignore_ascii_case("X-Location"))
+        .map(|(_h, b)| b);
+
+    let location = location.unwrap_or("no location provided");
+
     let code = 200;
     let response = format!(
-        "OK ({} / {} / {} / {})",
-        state.name, state.count, state.counter, state.dog_url
+        "OK ({} / {} / {} / {} / {})",
+        state.name, state.count, state.counter, state.dog_url, location
     );
     let opt_200_rpl = &response.as_opensips_str();
     let tag = ptr::null_mut();
