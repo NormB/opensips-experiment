@@ -197,8 +197,7 @@ unsafe extern "C" fn init() -> c_int {
     let chatgpt_key = CStr::from_ptr(chatgpt_key);
     let chatgpt_key = chatgpt_key.to_string_lossy().into();
 
-    let mut sigb = std::mem::zeroed();
-    opensips::load_sig_api(&mut sigb);
+    let Some(sigb) = opensips::load_sig_api() else { return -1 };
 
     let mut state = STATE.write().expect("Lock poisoned");
     assert!(state.is_none(), "Double-initializing the module");

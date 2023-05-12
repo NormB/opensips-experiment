@@ -132,18 +132,44 @@ impl<const N: usize> dep_export_concrete<N> {
 // This is a `static inline` function which bindgen doesn't
 // generate. Define it ourselves.
 #[inline]
-pub unsafe fn load_sig_api(sigb: *mut sig_binds) -> c_int {
-    // import the SL auto-loading function
-    let load_sig_raw = find_export(cstr_lit!("load_sig"), 0);
-    let load_sig: load_sig_f = mem::transmute(load_sig_raw);
+pub fn load_sig_api() -> Option<sig_binds> {
+    // # Safety
+    //
+    // `find_export` is called with a static string and the same
+    // parameter for flags as every other call I can see in the
+    // opensips codebase.
+    //
+    // `transmute` is equivalent to the function pointer cast in the
+    // original C code, and relies on the fact that any
+    // `Option<function pointer>` has the same memory layout and
+    // restrictions as any other.
+    let load_sig: load_sig_f = unsafe {
+        // import the SL auto-loading function
+        let load_sig_raw = find_export(cstr_lit!("load_sig"), 0);
+        mem::transmute(load_sig_raw)
+    };
 
     let Some(load_sig) = load_sig else {
         // TODO: LM_ERR("can't import load_sig\n");
-        return -1;
+        return None;
     };
 
-    // let the auto-loading function load all TM stuff
-    load_sig(sigb)
+    let mut sigb = sig_binds {
+        reply: None,
+        gen_totag: None,
+    };
+
+    // # Safety
+    //
+    // We have properly initialized `sigb`.
+    unsafe {
+        // let the auto-loading function load all TM stuff
+        if load_sig(&mut sigb) == -1 {
+            return None;
+        };
+    }
+
+    Some(sigb)
 }
 
 #[inline]
@@ -186,12 +212,17 @@ impl StrExt for str {
 }
 
 impl sip_msg {
-    pub unsafe fn header_iter(&self) -> impl Iterator<Item = &hdr_field> {
+    pub fn header_iter(&self) -> impl Iterator<Item = &hdr_field> {
         core::iter::from_fn({
             let mut head_raw = self.headers;
 
             move || {
-                let head = head_raw.as_ref();
+                // # Safety
+                //
+                // We are checking for NULL, but otherwise we trust
+                // that OpenSIPS has correctly initialized this data
+                // and is not going to attempt to modify it.
+                let head = unsafe { head_raw.as_ref() };
                 if let Some(head) = head {
                     head_raw = head.next;
                 }
