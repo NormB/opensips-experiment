@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let bindings = builder
         .clang_arg(format!("-D CARGO_CFG_TARGET_ARCH__{cargo_cfg_target_arch}=1"))
-        .header("opensips_bindings.h")
+        .header("bindings.h")
         // This has a duplicate definition
         .blocklist_item("IPPORT_RESERVED")
         // Modules look a bit nicer for enums
