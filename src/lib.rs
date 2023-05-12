@@ -10,7 +10,7 @@ use std::{
 };
 use tokio::{
     fs,
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
     select,
     sync::{broadcast, mpsc},
@@ -352,7 +352,7 @@ struct GlobalState {
     name: String,
     counter: u32,
     sigb: bindings::sig_binds,
-    parent_tx: Option<mpsc::Sender<()>>,
+    parent_tx: Option<mpsc::Sender<Message>>,
 }
 
 static STATE: RwLock<Option<GlobalState>> = RwLock::new(None);
@@ -405,6 +405,11 @@ unsafe extern "C" fn init_child(rank: c_int) -> c_int {
     0
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+enum Message {
+    IncrementCounter,
+}
+
 const CONTROL_SOCKET: &str = "/usr/local/etc/opensips/rust_experiment";
 
 #[tokio::main(flavor = "current_thread")]
@@ -444,65 +449,88 @@ async fn run_server_loop() {
                 }
             }
 
-            Some(()) = rx.recv() => {
-                b_tx.send(()).unwrap();
+            Some(msg) = rx.recv() => {
+                b_tx.send(msg).unwrap();
             }
         }
     }
 }
 
 async fn run_server_child(
-    mut stream: UnixStream,
-    tx: mpsc::Sender<()>,
-    mut b_rx: broadcast::Receiver<()>,
+    stream: UnixStream,
+    tx: mpsc::Sender<Message>,
+    mut b_rx: broadcast::Receiver<Message>,
 ) {
     eprintln!(
         "rust_experiment::run_server_child called (PID {})",
         std::process::id()
     );
 
-    let mut data = [0];
+    let mut stream = BufReader::new(stream);
+    let mut data = String::with_capacity(1024);
 
     loop {
+        data.clear();
+
         select! {
-            Ok(()) = b_rx.recv() => {
+            Ok(msg) = b_rx.recv() => {
                 eprintln!("[{}] Got data from broadcast, sending to worker", std::process::id());
-                stream.write_all(&[42]).await.unwrap();
+                let msg = serde_json::to_vec(&msg).unwrap();
+                stream.write_all(&msg).await.unwrap();
+                stream.write_all(&[b'\n']).await.unwrap();
+                stream.flush().await.unwrap();
             }
 
-            Ok(1) = stream.read_exact(&mut data) => {
+            Ok(n_bytes) = stream.read_line(&mut data) => {
+                if n_bytes == 0 { break }
+
                 eprintln!("[{}] Got data from worker, broadcasting...", std::process::id());
-                tx.send(()).await.unwrap();
+                let msg = serde_json::from_str(&data).expect("Data was not valid JSON");
+
+                tx.send(msg).await.unwrap();
             }
         }
     }
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn run_worker_loop(mut rx: mpsc::Receiver<()>) {
+async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
     eprintln!(
         "rust_experiment::run_worker_loop called (PID {})",
         std::process::id()
     );
 
-    let mut stream = UnixStream::connect(CONTROL_SOCKET).await.unwrap();
+    let stream = UnixStream::connect(CONTROL_SOCKET).await.unwrap();
+    let mut stream = BufReader::new(stream);
 
-    let mut data = [0];
+    let mut data = String::with_capacity(1024);
 
     loop {
+        data.clear();
+
         select! {
-            Some(()) = rx.recv() => {
+            Some(msg) = rx.recv() => {
                 eprintln!("[{}] Got data from channel, sending to parent...", std::process::id());
-                stream.write_all(&[42]).await.unwrap();
+                let msg = serde_json::to_vec(&msg).unwrap();
+                stream.write_all(&msg).await.unwrap();
+                stream.write_all(&[b'\n']).await.unwrap();
+                stream.flush().await.unwrap();
             }
 
-            Ok(1) = stream.read_exact(&mut data) => {
-                eprintln!("[{}], Received data from parent... incrementing counter", std::process::id());
+            Ok(n_bytes) = stream.read_line(&mut data) => {
+                if n_bytes == 0 { break }
 
-                let mut state = STATE.write().expect("Lock poisoned");
-                let mut state = state.as_mut().expect("State uninitialized");
-                state.counter = state.counter.wrapping_add(1);
-                // unlock via drop
+                eprintln!("[{}], Received data from parent...", std::process::id());
+
+                let msg = serde_json::from_str(&data).expect("Data was not valid JSON");
+                match msg {
+                    Message::IncrementCounter => {
+                        let mut state = STATE.write().expect("Lock poisoned");
+                        let mut state = state.as_mut().expect("State uninitialized");
+                        state.counter = state.counter.wrapping_add(1);
+                        // unlock via drop
+                    }
+                }
             }
         }
     }
@@ -580,7 +608,7 @@ unsafe extern "C" fn control(
     let state = STATE.read().expect("Lock poisoned");
     let state = state.as_ref().expect("Not initialized");
     let parent_tx = state.parent_tx.as_ref().expect("Can't talk to the network");
-    parent_tx.blocking_send(()).unwrap();
+    parent_tx.blocking_send(Message::IncrementCounter).unwrap();
 
     bindings::init_mi_result_ok()
 }
