@@ -423,6 +423,8 @@ async fn run_server_loop() {
         std::process::id()
     );
 
+    // We don't care if deleting fails as binding will tell us.
+    let _ = fs::remove_file(CONTROL_SOCKET).await;
     let listener = UnixListener::bind(CONTROL_SOCKET).unwrap();
     // TODO: Find minimal appropriate permissions
     fs::set_permissions(CONTROL_SOCKET, Permissions::from_mode(0o777))
