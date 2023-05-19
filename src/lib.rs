@@ -1,8 +1,7 @@
-use opensips::{cstr_lit, StrExt};
+use opensips::{cstr_lit, module_parameter, StrExt};
 use std::{
-    cell::UnsafeCell,
-    ffi::CStr,
     fs::Permissions,
+    num::NonZeroI32,
     os::raw::{c_char, c_int, c_void},
     os::unix::fs::PermissionsExt,
     ptr,
@@ -96,88 +95,18 @@ static CMDS: &[opensips::cmd_export_t] = &[
     opensips::cmd_export_t::NULL,
 ];
 
-static PARAMS: &[opensips::param_export_t] = &[
-    opensips::param_export_t {
-        name: cstr_lit!("count"),
-        type_: opensips::INT_PARAM,
-        param_pointer: COUNT.as_mut().cast(),
-    },
-    opensips::param_export_t {
-        name: cstr_lit!("name"),
-        type_: opensips::STR_PARAM,
-        param_pointer: NAME.as_mut().cast(),
-    },
-    opensips::param_export_t {
-        name: cstr_lit!("chatgpt-key"),
-        type_: opensips::STR_PARAM,
-        param_pointer: CHATGPT_KEY.as_mut().cast(),
-    },
-    opensips::param_export_t::NULL,
-];
+opensips::module_parameters! {
+    #[name = "count"]
+    static COUNT: module_parameter::Integer;
+
+    #[name = "name"]
+    static NAME: module_parameter::String;
+
+    #[name = "chatgpt-key"]
+    static CHATGPT_KEY: module_parameter::String;
+}
 
 const DEFAULT_NAME: &str = "This is the default name";
-
-static COUNT: GlobalIntParam = GlobalIntParam::new();
-static NAME: GlobalStrParam = GlobalStrParam::new();
-static CHATGPT_KEY: GlobalStrParam = GlobalStrParam::new();
-
-#[repr(C)]
-struct GlobalIntParam(UnsafeCell<c_int>);
-
-// This *requires* that the plugin is only used in a single-threaded
-// fashion.
-unsafe impl Sync for GlobalIntParam {}
-
-impl GlobalIntParam {
-    const fn new() -> Self {
-        Self(UnsafeCell::new(0))
-    }
-
-    fn get(&self) -> c_int {
-        unsafe { *self.0.get() }
-    }
-
-    const fn as_mut(&self) -> *mut c_int {
-        self.0.get()
-    }
-}
-
-#[repr(C)]
-struct GlobalStrParam(UnsafeCell<*mut c_char>);
-
-// This *requires* that the plugin is only used in a single-threaded
-// fashion.
-unsafe impl Sync for GlobalStrParam {}
-
-impl GlobalStrParam {
-    const fn new() -> Self {
-        Self(UnsafeCell::new(ptr::null_mut()))
-    }
-
-    fn get(&self) -> *mut c_char {
-        unsafe { *self.0.get() }
-    }
-
-    /// Gets the value as a valid UTF-8 Rust string.
-    ///
-    /// # Safety
-    ///
-    /// You must ensure that the pointer, if non-NULL, points to a
-    /// valid C string.
-    unsafe fn get_str(&self) -> Option<&str> {
-        let value = self.get();
-
-        if value.is_null() {
-            return None;
-        }
-
-        CStr::from_ptr(value).to_str().ok()
-    }
-
-    const fn as_mut(&self) -> *mut *mut c_char {
-        self.0.get()
-    }
-}
 
 static MI_EXPORTS: &[opensips::mi_export_t] = &[
     opensips::mi_export_t {
@@ -218,7 +147,7 @@ extern "C" fn init() -> c_int {
 
     info!("called");
 
-    let count = COUNT.get();
+    let count = COUNT.get_value().map_or(0, NonZeroI32::get);
     let count = count.try_into().unwrap_or(0);
 
     let name;
@@ -227,8 +156,8 @@ extern "C" fn init() -> c_int {
     // SAFETY: It is the responsibility of OpenSips to set these
     // values to valid C strings.
     unsafe {
-        name = NAME.get_str().unwrap_or(DEFAULT_NAME).into();
-        chatgpt_key = CHATGPT_KEY.get_str().map(Into::into);
+        name = NAME.get_value().unwrap_or(DEFAULT_NAME).into();
+        chatgpt_key = CHATGPT_KEY.get_value().map(Into::into);
     }
 
     let Some(sigb) = opensips::load_sig_api() else { return -1 };

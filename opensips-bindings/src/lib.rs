@@ -16,6 +16,8 @@ mod generated {
 
 pub use generated::*;
 
+pub mod module_parameter;
+
 // ... and what follows are additions we've made
 
 // C Strings are NUL-terminated
