@@ -1,3 +1,4 @@
+use opensips::{cstr_lit, StrExt};
 use std::{
     cell::UnsafeCell,
     ffi::CStr,
@@ -16,218 +17,18 @@ use tokio::{
     select,
     sync::{broadcast, mpsc},
 };
-
-mod bindings {
-    #![allow(dead_code)]
-    #![allow(non_camel_case_types)]
-    #![allow(non_upper_case_globals)]
-    #![allow(improper_ctypes)]
-    #![allow(non_snake_case)]
-
-    use core::{mem, ptr};
-    use std::os::raw::{c_char, c_int};
-
-    // This is the bindgen-created output...
-
-    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-
-    // ... and what follows are additions we've made
-
-    // C Strings are NUL-terminated
-    macro_rules! cstr_lit {
-        ($s:literal) => {
-            concat!($s, "\0").as_ptr()
-        };
-        // It seems like a mistake that some strings are marked as
-        // mutable; this should be throughly checked.
-        (mut $s:literal) => {
-            concat!($s, "\0").as_ptr() as *mut c_char
-        };
-    }
-    pub(crate) use cstr_lit;
-
-    // Since we are placing this data as a `static`, Rust needs to
-    // enforce that the data is OK to be used across multiple threads
-    // concurrently.
-    //
-    // I'm making the following assumptions that should be otherwise
-    // validated:
-    //
-    // 1. The data is never written to.
-    // 2. The modules are run in a single-threaded fashion.
-    unsafe impl Sync for module_exports {}
-    unsafe impl Sync for dep_export_t {}
-    unsafe impl Sync for cmd_export_t {}
-
-    // It appears opensips uses sentinel values to terminate arrays,
-    // so we might as well make those easy to create.
-
-    impl cmd_export_t {
-        pub const NULL: Self = Self {
-            name: ptr::null(),
-            function: None,
-            params: [cmd_param::NULL; 9],
-            flags: 0,
-        };
-    }
-
-    impl module_dependency {
-        pub const NULL: Self = Self {
-            mod_type: module_type::MOD_TYPE_NULL,
-            mod_name: ptr::null_mut(),
-            type_: 0,
-        };
-    }
-
-    impl modparam_dependency_t {
-        pub const NULL: Self = Self {
-            script_param: ptr::null_mut(),
-            get_deps_f: None,
-        };
-    }
-
-    impl cmd_param {
-        pub const NULL: Self = Self {
-            flags: 0,
-            fixup: None,
-            free_fixup: None,
-        };
-    }
-
-    unsafe impl Sync for param_export_t {}
-
-    impl param_export_t {
-        pub const NULL: Self = Self {
-            name: ptr::null(),
-            type_: 0,
-            param_pointer: ptr::null_mut(),
-        };
-    }
-
-    unsafe impl Sync for mi_export_t {}
-
-    impl mi_export_t {
-        pub const NULL: Self = Self {
-            name: ptr::null_mut(),
-            help: ptr::null_mut(),
-            flags: 0,
-            init_f: None,
-            recipes: [mi_recipe_t::NULL; 48],
-        };
-    }
-
-    impl mi_recipe_t {
-        pub const NULL: Self = Self {
-            cmd: None,
-            params: [ptr::null_mut(); 10],
-        };
-    }
-
-    // The `dep_export_t` structure uses a Flexible Array Member
-    // (FAM). These are quite annoying to deal with. Here, I create a
-    // parallel structure that uses a const generic array. This
-    // *should* have the same memory layout as `dep_export_t`, but we
-    // can only use it with a compile-time known length (which is all
-    // we need for now).
-
-    #[repr(C)]
-    pub struct dep_export_concrete<const N: usize> {
-        pub md: [module_dependency_t; 10usize],
-        pub mpd: [modparam_dependency_t; N],
-    }
-
-    unsafe impl<const N: usize> Sync for dep_export_concrete<N> {}
-
-    impl<const N: usize> dep_export_concrete<N> {
-        pub const fn as_ptr(&self) -> *const dep_export_t {
-            (self as *const Self).cast()
-        }
-    }
-
-    // This is a `static inline` function which bindgen doesn't
-    // generate. Define it ourselves.
-    #[inline]
-    pub unsafe fn load_sig_api(sigb: *mut sig_binds) -> c_int {
-        // import the SL auto-loading function
-        let load_sig_raw = find_export(cstr_lit!("load_sig"), 0);
-        let load_sig: load_sig_f = mem::transmute(load_sig_raw);
-
-        let Some(load_sig) = load_sig else {
-            // TODO: LM_ERR("can't import load_sig\n");
-            return -1;
-        };
-
-        // let the auto-loading function load all TM stuff
-        load_sig(sigb)
-    }
-
-    #[inline]
-    pub fn init_mi_result_ok() -> *mut mi_response_t {
-        unsafe { init_mi_result_string("OK".as_ptr(), 2) }
-    }
-
-    #[inline]
-    pub fn is_worker_proc(rank: c_int) -> bool {
-        rank >= 1
-    }
-
-    impl str_ {
-        pub fn try_as_str(&self) -> Result<&str, core::str::Utf8Error> {
-            let len = self.len.try_into().expect("TODO: report error");
-            // TODO: safety
-            let s = unsafe { core::slice::from_raw_parts(self.s, len) };
-            core::str::from_utf8(s)
-        }
-
-        pub fn as_str(&self) -> &str {
-            self.try_as_str().unwrap()
-        }
-    }
-
-    pub trait StrExt {
-        fn as_opensips_str(&self) -> str_;
-    }
-
-    impl StrExt for str {
-        fn as_opensips_str(&self) -> str_ {
-            str_ {
-                // It seems like a mistake that these strings are
-                // marked as mutable as they are used with constant
-                // data; likely the opensips types should be fixed.
-                s: self.as_ptr() as *mut c_char,
-                len: self.len().try_into().unwrap_or(0),
-            }
-        }
-    }
-
-    impl sip_msg {
-        pub unsafe fn header_iter(&self) -> impl Iterator<Item = &hdr_field> {
-            std::iter::from_fn({
-                let mut head_raw = self.headers;
-
-                move || {
-                    let head = head_raw.as_ref();
-                    if let Some(head) = head {
-                        head_raw = head.next;
-                    }
-                    head
-                }
-            })
-        }
-    }
-}
+use tracing::{error, info, instrument};
 
 mod chatgpt;
-
-use bindings::{cstr_lit, StrExt};
+mod formatter;
 
 #[no_mangle]
-pub static exports: bindings::module_exports = bindings::module_exports {
+pub static exports: opensips::module_exports = opensips::module_exports {
     name: cstr_lit!("rust-experiment"),
-    type_: bindings::module_type::MOD_TYPE_DEFAULT,
-    version: bindings::OPENSIPS_FULL_VERSION.as_ptr(),
-    compile_flags: bindings::OPENSIPS_COMPILE_FLAGS.as_ptr(),
-    dlflags: bindings::DEFAULT_DLFLAGS,
+    type_: opensips::module_type::MOD_TYPE_DEFAULT,
+    version: opensips::OPENSIPS_FULL_VERSION.as_ptr(),
+    compile_flags: opensips::OPENSIPS_COMPILE_FLAGS.as_ptr(),
+    dlflags: opensips::DEFAULT_DLFLAGS,
     load_f: None,
     deps: DEPS.as_ptr(),
     cmds: CMDS.as_ptr(),
@@ -246,65 +47,65 @@ pub static exports: bindings::module_exports = bindings::module_exports {
     reload_ack_f: None,
 };
 
-static DEPS: bindings::dep_export_concrete<1> = bindings::dep_export_concrete {
+static DEPS: opensips::dep_export_concrete<1> = opensips::dep_export_concrete {
     md: {
-        let mut md = [bindings::module_dependency::NULL; 10];
-        md[0] = bindings::module_dependency {
-            mod_type: bindings::module_type::MOD_TYPE_DEFAULT,
+        let mut md = [opensips::module_dependency::NULL; 10];
+        md[0] = opensips::module_dependency {
+            mod_type: opensips::module_type::MOD_TYPE_DEFAULT,
             mod_name: cstr_lit!(mut "signaling"),
-            type_: bindings::DEP_ABORT,
+            type_: opensips::DEP_ABORT,
         };
         md
     },
-    mpd: [bindings::modparam_dependency::NULL],
+    mpd: [opensips::modparam_dependency::NULL],
 };
 
-static CMDS: &[bindings::cmd_export_t] = &[
-    bindings::cmd_export_t {
+static CMDS: &[opensips::cmd_export_t] = &[
+    opensips::cmd_export_t {
         name: cstr_lit!("rust_experiment_reply"),
         function: Some(reply),
-        params: [bindings::cmd_param::NULL; 9],
-        flags: bindings::REQUEST_ROUTE,
+        params: [opensips::cmd_param::NULL; 9],
+        flags: opensips::REQUEST_ROUTE,
     },
-    bindings::cmd_export_t {
+    opensips::cmd_export_t {
         name: cstr_lit!("rust_experiment_test_str"),
         function: Some(test_str),
         params: {
-            let mut params = [bindings::cmd_param::NULL; 9];
-            params[0] = bindings::cmd_param {
-                flags: bindings::CMD_PARAM_STR,
+            let mut params = [opensips::cmd_param::NULL; 9];
+            params[0] = opensips::cmd_param {
+                flags: opensips::CMD_PARAM_STR,
                 fixup: None,
                 free_fixup: None,
             };
-            params[1] = bindings::cmd_param {
-                flags: bindings::CMD_PARAM_STR,
+            params[1] = opensips::cmd_param {
+                flags: opensips::CMD_PARAM_STR,
                 fixup: None,
                 free_fixup: None,
             };
             params
         },
-        flags: bindings::REQUEST_ROUTE,
+        flags: opensips::REQUEST_ROUTE,
     },
-    bindings::cmd_export_t::NULL,
+    opensips::cmd_export_t::NULL,
 ];
 
-static PARAMS: &[bindings::param_export_t] = &[
-    bindings::param_export_t {
+static PARAMS: &[opensips::param_export_t] = &[
+    opensips::param_export_t {
         name: cstr_lit!("count"),
-        type_: bindings::INT_PARAM,
+        type_: opensips::INT_PARAM,
         param_pointer: COUNT.as_mut().cast(),
     },
-    bindings::param_export_t {
+    opensips::param_export_t {
         name: cstr_lit!("name"),
-        type_: bindings::STR_PARAM,
+        type_: opensips::STR_PARAM,
         param_pointer: NAME.as_mut().cast(),
     },
-    bindings::param_export_t {
+    opensips::param_export_t {
         name: cstr_lit!("chatgpt-key"),
-        type_: bindings::STR_PARAM,
+        type_: opensips::STR_PARAM,
         param_pointer: CHATGPT_KEY.as_mut().cast(),
     },
-    bindings::param_export_t::NULL,
+    opensips::param_export_t::NULL,
 ];
 
 static COUNT: GlobalIntParam = GlobalIntParam::new();
@@ -353,22 +154,22 @@ impl GlobalStrParam {
     }
 }
 
-static MI_EXPORTS: &[bindings::mi_export_t] = &[
-    bindings::mi_export_t {
+static MI_EXPORTS: &[opensips::mi_export_t] = &[
+    opensips::mi_export_t {
         name: cstr_lit!(mut "rust_experiment_control"),
         help: cstr_lit!(mut ""),
         flags: 0,
         init_f: None,
         recipes: {
-            let mut recipes = [bindings::mi_recipe_t::NULL; 48];
-            recipes[0] = bindings::mi_recipe_t {
+            let mut recipes = [opensips::mi_recipe_t::NULL; 48];
+            recipes[0] = opensips::mi_recipe_t {
                 cmd: Some(control),
                 params: [ptr::null_mut(); 10],
             };
             recipes
         },
     },
-    bindings::mi_export_t::NULL,
+    opensips::mi_export_t::NULL,
 ];
 
 #[derive(Debug)]
@@ -377,7 +178,7 @@ struct GlobalState {
     name: String,
     counter: u32,
     dog_url: String,
-    sigb: bindings::sig_binds,
+    sigb: opensips::sig_binds,
     parent_tx: Option<mpsc::Sender<Message>>,
     chatgpt_key: String,
 }
@@ -385,7 +186,12 @@ struct GlobalState {
 static STATE: RwLock<Option<GlobalState>> = RwLock::new(None);
 
 unsafe extern "C" fn init() -> c_int {
-    eprintln!("rust_experiment::init called (PID {})", std::process::id());
+    formatter::install();
+
+    // `#[instrument]` doesn't work until the formatter is installed.
+    let _span = tracing::info_span!("init").entered();
+
+    info!("called");
 
     let count = COUNT.get();
     let count = count.try_into().unwrap_or(0);
@@ -398,8 +204,7 @@ unsafe extern "C" fn init() -> c_int {
     let chatgpt_key = CStr::from_ptr(chatgpt_key);
     let chatgpt_key = chatgpt_key.to_string_lossy().into();
 
-    let mut sigb = std::mem::zeroed();
-    bindings::load_sig_api(&mut sigb);
+    let Some(sigb) = opensips::load_sig_api() else { return -1 };
 
     let mut state = STATE.write().expect("Lock poisoned");
     assert!(state.is_none(), "Double-initializing the module");
@@ -420,11 +225,9 @@ unsafe extern "C" fn init() -> c_int {
     0
 }
 
+#[instrument]
 unsafe extern "C" fn init_child(rank: c_int) -> c_int {
-    eprintln!(
-        "rust_experiment::init_child called (PID {}, rank {rank})",
-        std::process::id()
-    );
+    info!("called");
 
     let (tx, rx) = mpsc::channel(3);
 
@@ -447,11 +250,9 @@ enum Message {
 const CONTROL_SOCKET: &str = "/usr/local/etc/opensips/rust_experiment";
 
 #[tokio::main(flavor = "current_thread")]
+#[instrument]
 async fn run_server_loop() {
-    eprintln!(
-        "rust_experiment::run_server_loop called (PID {})",
-        std::process::id()
-    );
+    info!("called");
 
     // We don't care if deleting fails as binding will tell us.
     let _ = fs::remove_file(CONTROL_SOCKET).await;
@@ -471,7 +272,7 @@ async fn run_server_loop() {
             connection = listener.accept() => {
                 match connection {
                     Ok((stream, _addr)) => {
-                        eprintln!("rust_experiment::run_server_loop worker connected (PID {})", std::process::id());
+                        info!("worker connected");
 
                         let tx = tx.clone();
                         let b_rx = b_rx.resubscribe();
@@ -480,8 +281,7 @@ async fn run_server_loop() {
                         tokio::spawn(run_server_child(stream, tx, b_rx));
                     }
                     Err(err) => {
-                        eprintln!("{err}");
-                        eprintln!("{err:?}");
+                        error!("{err} / {err:?}");
                         break;
                     }
                 }
@@ -520,15 +320,13 @@ async fn run_api_task(tx: mpsc::Sender<Message>) {
     }
 }
 
+#[instrument(skip_all)]
 async fn run_server_child(
     stream: UnixStream,
     tx: mpsc::Sender<Message>,
     mut b_rx: broadcast::Receiver<Message>,
 ) {
-    eprintln!(
-        "rust_experiment::run_server_child called (PID {})",
-        std::process::id()
-    );
+    info!("called");
 
     let mut stream = BufReader::new(stream);
     let mut data = String::with_capacity(1024);
@@ -538,7 +336,7 @@ async fn run_server_child(
 
         select! {
             Ok(msg) = b_rx.recv() => {
-                eprintln!("[{}] Got data from broadcast, sending to worker", std::process::id());
+                info!("Got data from broadcast, sending to worker");
                 let msg = serde_json::to_vec(&msg).unwrap();
                 stream.write_all(&msg).await.unwrap();
                 stream.write_all(&[b'\n']).await.unwrap();
@@ -548,7 +346,7 @@ async fn run_server_child(
             Ok(n_bytes) = stream.read_line(&mut data) => {
                 if n_bytes == 0 { break }
 
-                eprintln!("[{}] Got data from worker, broadcasting...", std::process::id());
+                info!("Got data from worker, broadcasting...");
                 let msg = serde_json::from_str(&data).expect("Data was not valid JSON");
 
                 tx.send(msg).await.unwrap();
@@ -558,11 +356,9 @@ async fn run_server_child(
 }
 
 #[tokio::main(flavor = "current_thread")]
+#[instrument(skip_all)]
 async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
-    eprintln!(
-        "rust_experiment::run_worker_loop called (PID {})",
-        std::process::id()
-    );
+    info!("called");
 
     let stream = UnixStream::connect(CONTROL_SOCKET).await.unwrap();
     let mut stream = BufReader::new(stream);
@@ -574,7 +370,7 @@ async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
 
         select! {
             Some(msg) = rx.recv() => {
-                eprintln!("[{}] Got data from channel, sending to parent...", std::process::id());
+                info!("Got data from channel, sending to parent...");
                 let msg = serde_json::to_vec(&msg).unwrap();
                 stream.write_all(&msg).await.unwrap();
                 stream.write_all(&[b'\n']).await.unwrap();
@@ -584,7 +380,7 @@ async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
             Ok(n_bytes) = stream.read_line(&mut data) => {
                 if n_bytes == 0 { break }
 
-                eprintln!("[{}], Received data from parent...", std::process::id());
+                info!("Received data from parent...");
 
                 let msg = serde_json::from_str(&data).expect("Data was not valid JSON");
                 match msg {
@@ -605,8 +401,9 @@ async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
     }
 }
 
+#[instrument(skip_all)]
 unsafe extern "C" fn reply(
-    msg: *mut bindings::sip_msg,
+    msg: *mut opensips::sip_msg,
     _ctx: *mut c_void,
     _arg2: *mut c_void,
     _arg3: *mut c_void,
@@ -616,7 +413,7 @@ unsafe extern "C" fn reply(
     _arg7: *mut c_void,
     _arg8: *mut c_void,
 ) -> i32 {
-    eprintln!("rust_experiment::reply called (PID {})", std::process::id());
+    info!("called");
 
     let state = STATE.read().expect("Lock poisoned");
     let state = state.as_ref().expect("Not initialized");
@@ -634,13 +431,13 @@ unsafe extern "C" fn reply(
         let mut header = String::from(name);
         header.push_str(": ");
         header.push_str(value);
-        header.push_str("\n");
+        header.push('\n');
 
-        let lump = bindings::add_lump_rpl(
+        let lump = opensips::add_lump_rpl(
             msg,
             header.as_mut_ptr(),
             header.len().try_into().unwrap(),
-            bindings::LUMP_RPL_HDR | bindings::LUMP_RPL_NOFREE,
+            opensips::LUMP_RPL_HDR | opensips::LUMP_RPL_NOFREE,
         );
 
         !lump.is_null()
@@ -651,13 +448,13 @@ unsafe extern "C" fn reply(
         state.name, state.count, state.counter, state.dog_url
     );
     if !add_header("X-Rust", &rust_header_value) {
-        // TODO: error
+        error!("Unable to add the X-Rust header");
         return -1;
     }
 
     if let Some(chatgpt_header_value) = chatgpt_response {
         if !add_header("X-ChatGPT", &chatgpt_header_value) {
-            // TODO: error
+            error!("Unable to add the X-ChatGPT header");
             return -1;
         }
     }
@@ -669,15 +466,16 @@ unsafe extern "C" fn reply(
     let tag = ptr::null_mut();
 
     if reply(msg, code, reason, tag) == -1 {
-        // TODO: LM_ERR("failed to send 200 via send_reply\n");
+        error!("failed to reply with 200");
         return -1;
     }
 
     0
 }
 
+#[instrument(skip_all)]
 unsafe extern "C" fn test_str(
-    _msg: *mut bindings::sip_msg,
+    _msg: *mut opensips::sip_msg,
     s1: *mut c_void,
     s2: *mut c_void,
     _arg3: *mut c_void,
@@ -687,13 +485,10 @@ unsafe extern "C" fn test_str(
     _arg7: *mut c_void,
     _arg8: *mut c_void,
 ) -> i32 {
-    eprintln!(
-        "rust_experiment::test_str called (PID {})",
-        std::process::id()
-    );
+    info!("called");
 
-    let s1 = s1.cast::<bindings::str_>();
-    let s2 = s2.cast::<bindings::str_>();
+    let s1 = s1.cast::<opensips::str_>();
+    let s2 = s2.cast::<opensips::str_>();
 
     let s1 = &*s1;
     let s2 = &*s2;
@@ -704,19 +499,16 @@ unsafe extern "C" fn test_str(
     s1.contains(s2) as _
 }
 
+#[instrument(skip_all)]
 unsafe extern "C" fn control(
-    _params: *const bindings::mi_params_t,
-    _async_hdl: *mut bindings::mi_handler,
-) -> *mut bindings::mi_response_t {
-    eprintln!(
-        "rust_experiment::control called (PID {})",
-        std::process::id()
-    );
-
+    _params: *const opensips::mi_params_t,
+    _async_hdl: *mut opensips::mi_handler,
+) -> *mut opensips::mi_response_t {
+    info!("called");
     let state = STATE.read().expect("Lock poisoned");
     let state = state.as_ref().expect("Not initialized");
     let parent_tx = state.parent_tx.as_ref().expect("Can't talk to the network");
     parent_tx.blocking_send(Message::IncrementCounter).unwrap();
 
-    bindings::init_mi_result_ok()
+    opensips::init_mi_result_ok()
 }
