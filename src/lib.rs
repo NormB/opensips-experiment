@@ -17,8 +17,10 @@ use tokio::{
     select,
     sync::{broadcast, mpsc},
 };
+use tracing::{error, info, instrument};
 
 mod chatgpt;
+mod formatter;
 
 #[no_mangle]
 pub static exports: opensips::module_exports = opensips::module_exports {
@@ -184,7 +186,12 @@ struct GlobalState {
 static STATE: RwLock<Option<GlobalState>> = RwLock::new(None);
 
 unsafe extern "C" fn init() -> c_int {
-    eprintln!("rust_experiment::init called (PID {})", std::process::id());
+    formatter::install();
+
+    // `#[instrument]` doesn't work until the formatter is installed.
+    let _span = tracing::info_span!("init").entered();
+
+    info!("called");
 
     let count = COUNT.get();
     let count = count.try_into().unwrap_or(0);
@@ -218,11 +225,9 @@ unsafe extern "C" fn init() -> c_int {
     0
 }
 
+#[instrument]
 unsafe extern "C" fn init_child(rank: c_int) -> c_int {
-    eprintln!(
-        "rust_experiment::init_child called (PID {}, rank {rank})",
-        std::process::id()
-    );
+    info!("called");
 
     let (tx, rx) = mpsc::channel(3);
 
@@ -245,11 +250,9 @@ enum Message {
 const CONTROL_SOCKET: &str = "/usr/local/etc/opensips/rust_experiment";
 
 #[tokio::main(flavor = "current_thread")]
+#[instrument]
 async fn run_server_loop() {
-    eprintln!(
-        "rust_experiment::run_server_loop called (PID {})",
-        std::process::id()
-    );
+    info!("called");
 
     // We don't care if deleting fails as binding will tell us.
     let _ = fs::remove_file(CONTROL_SOCKET).await;
@@ -269,7 +272,7 @@ async fn run_server_loop() {
             connection = listener.accept() => {
                 match connection {
                     Ok((stream, _addr)) => {
-                        eprintln!("rust_experiment::run_server_loop worker connected (PID {})", std::process::id());
+                        info!("worker connected");
 
                         let tx = tx.clone();
                         let b_rx = b_rx.resubscribe();
@@ -278,8 +281,7 @@ async fn run_server_loop() {
                         tokio::spawn(run_server_child(stream, tx, b_rx));
                     }
                     Err(err) => {
-                        eprintln!("{err}");
-                        eprintln!("{err:?}");
+                        error!("{err} / {err:?}");
                         break;
                     }
                 }
@@ -318,15 +320,13 @@ async fn run_api_task(tx: mpsc::Sender<Message>) {
     }
 }
 
+#[instrument(skip_all)]
 async fn run_server_child(
     stream: UnixStream,
     tx: mpsc::Sender<Message>,
     mut b_rx: broadcast::Receiver<Message>,
 ) {
-    eprintln!(
-        "rust_experiment::run_server_child called (PID {})",
-        std::process::id()
-    );
+    info!("called");
 
     let mut stream = BufReader::new(stream);
     let mut data = String::with_capacity(1024);
@@ -336,7 +336,7 @@ async fn run_server_child(
 
         select! {
             Ok(msg) = b_rx.recv() => {
-                eprintln!("[{}] Got data from broadcast, sending to worker", std::process::id());
+                info!("Got data from broadcast, sending to worker");
                 let msg = serde_json::to_vec(&msg).unwrap();
                 stream.write_all(&msg).await.unwrap();
                 stream.write_all(&[b'\n']).await.unwrap();
@@ -346,7 +346,7 @@ async fn run_server_child(
             Ok(n_bytes) = stream.read_line(&mut data) => {
                 if n_bytes == 0 { break }
 
-                eprintln!("[{}] Got data from worker, broadcasting...", std::process::id());
+                info!("Got data from worker, broadcasting...");
                 let msg = serde_json::from_str(&data).expect("Data was not valid JSON");
 
                 tx.send(msg).await.unwrap();
@@ -356,11 +356,9 @@ async fn run_server_child(
 }
 
 #[tokio::main(flavor = "current_thread")]
+#[instrument(skip_all)]
 async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
-    eprintln!(
-        "rust_experiment::run_worker_loop called (PID {})",
-        std::process::id()
-    );
+    info!("called");
 
     let stream = UnixStream::connect(CONTROL_SOCKET).await.unwrap();
     let mut stream = BufReader::new(stream);
@@ -372,7 +370,7 @@ async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
 
         select! {
             Some(msg) = rx.recv() => {
-                eprintln!("[{}] Got data from channel, sending to parent...", std::process::id());
+                info!("Got data from channel, sending to parent...");
                 let msg = serde_json::to_vec(&msg).unwrap();
                 stream.write_all(&msg).await.unwrap();
                 stream.write_all(&[b'\n']).await.unwrap();
@@ -382,7 +380,7 @@ async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
             Ok(n_bytes) = stream.read_line(&mut data) => {
                 if n_bytes == 0 { break }
 
-                eprintln!("[{}], Received data from parent...", std::process::id());
+                info!("Received data from parent...");
 
                 let msg = serde_json::from_str(&data).expect("Data was not valid JSON");
                 match msg {
@@ -403,6 +401,7 @@ async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
     }
 }
 
+#[instrument(skip_all)]
 unsafe extern "C" fn reply(
     msg: *mut opensips::sip_msg,
     _ctx: *mut c_void,
@@ -414,7 +413,7 @@ unsafe extern "C" fn reply(
     _arg7: *mut c_void,
     _arg8: *mut c_void,
 ) -> i32 {
-    eprintln!("rust_experiment::reply called (PID {})", std::process::id());
+    info!("called");
 
     let state = STATE.read().expect("Lock poisoned");
     let state = state.as_ref().expect("Not initialized");
@@ -449,13 +448,13 @@ unsafe extern "C" fn reply(
         state.name, state.count, state.counter, state.dog_url
     );
     if !add_header("X-Rust", &rust_header_value) {
-        // TODO: error
+        error!("Unable to add the X-Rust header");
         return -1;
     }
 
     if let Some(chatgpt_header_value) = chatgpt_response {
         if !add_header("X-ChatGPT", &chatgpt_header_value) {
-            // TODO: error
+            error!("Unable to add the X-ChatGPT header");
             return -1;
         }
     }
@@ -467,13 +466,14 @@ unsafe extern "C" fn reply(
     let tag = ptr::null_mut();
 
     if reply(msg, code, reason, tag) == -1 {
-        // TODO: LM_ERR("failed to send 200 via send_reply\n");
+        error!("failed to reply with 200");
         return -1;
     }
 
     0
 }
 
+#[instrument(skip_all)]
 unsafe extern "C" fn test_str(
     _msg: *mut opensips::sip_msg,
     s1: *mut c_void,
@@ -485,10 +485,7 @@ unsafe extern "C" fn test_str(
     _arg7: *mut c_void,
     _arg8: *mut c_void,
 ) -> i32 {
-    eprintln!(
-        "rust_experiment::test_str called (PID {})",
-        std::process::id()
-    );
+    info!("called");
 
     let s1 = s1.cast::<opensips::str_>();
     let s2 = s2.cast::<opensips::str_>();
@@ -502,15 +499,12 @@ unsafe extern "C" fn test_str(
     s1.contains(s2) as _
 }
 
+#[instrument(skip_all)]
 unsafe extern "C" fn control(
     _params: *const opensips::mi_params_t,
     _async_hdl: *mut opensips::mi_handler,
 ) -> *mut opensips::mi_response_t {
-    eprintln!(
-        "rust_experiment::control called (PID {})",
-        std::process::id()
-    );
-
+    info!("called");
     let state = STATE.read().expect("Lock poisoned");
     let state = state.as_ref().expect("Not initialized");
     let parent_tx = state.parent_tx.as_ref().expect("Can't talk to the network");
