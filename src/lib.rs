@@ -1,9 +1,8 @@
-use opensips::{cstr_lit, StrExt};
+use opensips::{cstr_lit, module_parameter, StrExt};
 use std::{
-    cell::UnsafeCell,
-    ffi::CStr,
     fs::Permissions,
-    os::raw::{c_char, c_int, c_void},
+    num::NonZeroI32,
+    os::raw::{c_char, c_int},
     os::unix::fs::PermissionsExt,
     ptr,
     sync::RwLock,
@@ -21,6 +20,13 @@ use tracing::{error, info, instrument};
 
 mod chatgpt;
 mod formatter;
+
+// With a lot of FFI interaction, these safety comments are applicable
+// in multiple locations.
+//
+// SAFETY: [OpenSIPS::valid] It is the responsibility of OpenSIPS and
+// how it invokes the modules to ensure that these values are set to
+// valid values.
 
 #[no_mangle]
 pub static exports: opensips::module_exports = opensips::module_exports {
@@ -60,99 +66,26 @@ static DEPS: opensips::dep_export_concrete<1> = opensips::dep_export_concrete {
     mpd: [opensips::modparam_dependency::NULL],
 };
 
-static CMDS: &[opensips::cmd_export_t] = &[
-    opensips::cmd_export_t {
-        name: cstr_lit!("rust_experiment_reply"),
-        function: Some(reply),
-        params: [opensips::cmd_param::NULL; 9],
-        flags: opensips::REQUEST_ROUTE,
-    },
-    opensips::cmd_export_t {
-        name: cstr_lit!("rust_experiment_test_str"),
-        function: Some(test_str),
-        params: {
-            let mut params = [opensips::cmd_param::NULL; 9];
-            params[0] = opensips::cmd_param {
-                flags: opensips::CMD_PARAM_STR,
-                fixup: None,
-                free_fixup: None,
-            };
-            params[1] = opensips::cmd_param {
-                flags: opensips::CMD_PARAM_STR,
-                fixup: None,
-                free_fixup: None,
-            };
-            params
-        },
-        flags: opensips::REQUEST_ROUTE,
-    },
-    opensips::cmd_export_t::NULL,
-];
+opensips::commands! {
+    #[name = "rust_experiment_reply"]
+    fn reply;
 
-static PARAMS: &[opensips::param_export_t] = &[
-    opensips::param_export_t {
-        name: cstr_lit!("count"),
-        type_: opensips::INT_PARAM,
-        param_pointer: COUNT.as_mut().cast(),
-    },
-    opensips::param_export_t {
-        name: cstr_lit!("name"),
-        type_: opensips::STR_PARAM,
-        param_pointer: NAME.as_mut().cast(),
-    },
-    opensips::param_export_t {
-        name: cstr_lit!("chatgpt-key"),
-        type_: opensips::STR_PARAM,
-        param_pointer: CHATGPT_KEY.as_mut().cast(),
-    },
-    opensips::param_export_t::NULL,
-];
-
-static COUNT: GlobalIntParam = GlobalIntParam::new();
-static NAME: GlobalStrParam = GlobalStrParam::new();
-static CHATGPT_KEY: GlobalStrParam = GlobalStrParam::new();
-
-#[repr(C)]
-struct GlobalIntParam(UnsafeCell<c_int>);
-
-// This *requires* that the plugin is only used in a single-threaded
-// fashion.
-unsafe impl Sync for GlobalIntParam {}
-
-impl GlobalIntParam {
-    const fn new() -> Self {
-        Self(UnsafeCell::new(0))
-    }
-
-    fn get(&self) -> c_int {
-        unsafe { *self.0.get() }
-    }
-
-    const fn as_mut(&self) -> *mut c_int {
-        self.0.get()
-    }
+    #[name = "rust_experiment_test_str"]
+    fn test_str;
 }
 
-#[repr(C)]
-struct GlobalStrParam(UnsafeCell<*mut c_char>);
+opensips::module_parameters! {
+    #[name = "count"]
+    static COUNT: module_parameter::Integer;
 
-// This *requires* that the plugin is only used in a single-threaded
-// fashion.
-unsafe impl Sync for GlobalStrParam {}
+    #[name = "name"]
+    static NAME: module_parameter::String;
 
-impl GlobalStrParam {
-    const fn new() -> Self {
-        Self(UnsafeCell::new(ptr::null_mut()))
-    }
-
-    fn get(&self) -> *mut c_char {
-        unsafe { *self.0.get() }
-    }
-
-    const fn as_mut(&self) -> *mut *mut c_char {
-        self.0.get()
-    }
+    #[name = "chatgpt-key"]
+    static CHATGPT_KEY: module_parameter::String;
 }
+
+const DEFAULT_NAME: &str = "This is the default name";
 
 static MI_EXPORTS: &[opensips::mi_export_t] = &[
     opensips::mi_export_t {
@@ -180,12 +113,12 @@ struct GlobalState {
     dog_url: String,
     sigb: opensips::sig_binds,
     parent_tx: Option<mpsc::Sender<Message>>,
-    chatgpt_key: String,
+    chatgpt_key: Option<String>,
 }
 
 static STATE: RwLock<Option<GlobalState>> = RwLock::new(None);
 
-unsafe extern "C" fn init() -> c_int {
+extern "C" fn init() -> c_int {
     formatter::install();
 
     // `#[instrument]` doesn't work until the formatter is installed.
@@ -193,16 +126,18 @@ unsafe extern "C" fn init() -> c_int {
 
     info!("called");
 
-    let count = COUNT.get();
+    let count = COUNT.get_value().map_or(0, NonZeroI32::get);
     let count = count.try_into().unwrap_or(0);
 
-    let name = NAME.get();
-    let name = CStr::from_ptr(name);
-    let name = name.to_string_lossy().into();
+    let name;
+    let chatgpt_key;
 
-    let chatgpt_key = CHATGPT_KEY.get();
-    let chatgpt_key = CStr::from_ptr(chatgpt_key);
-    let chatgpt_key = chatgpt_key.to_string_lossy().into();
+    // SAFETY: It is the responsibility of OpenSips to set these
+    // values to valid C strings.
+    unsafe {
+        name = NAME.get_value().unwrap_or(DEFAULT_NAME).into();
+        chatgpt_key = CHATGPT_KEY.get_value().map(Into::into);
+    }
 
     let Some(sigb) = opensips::load_sig_api() else { return -1 };
 
@@ -226,7 +161,7 @@ unsafe extern "C" fn init() -> c_int {
 }
 
 #[instrument]
-unsafe extern "C" fn init_child(rank: c_int) -> c_int {
+extern "C" fn init_child(rank: c_int) -> c_int {
     info!("called");
 
     let (tx, rx) = mpsc::channel(3);
@@ -402,30 +337,25 @@ async fn run_worker_loop(mut rx: mpsc::Receiver<Message>) {
 }
 
 #[instrument(skip_all)]
-unsafe extern "C" fn reply(
-    msg: *mut opensips::sip_msg,
-    _ctx: *mut c_void,
-    _arg2: *mut c_void,
-    _arg3: *mut c_void,
-    _arg4: *mut c_void,
-    _arg5: *mut c_void,
-    _arg6: *mut c_void,
-    _arg7: *mut c_void,
-    _arg8: *mut c_void,
-) -> i32 {
+fn reply(msg: &mut opensips::sip_msg) -> i32 {
     info!("called");
 
     let state = STATE.read().expect("Lock poisoned");
     let state = state.as_ref().expect("Not initialized");
-    let msg = &mut *msg;
 
-    let chatgpt_query = msg
-        .header_iter()
-        .map(|h| (h.name.as_str(), h.body.as_str()))
-        .find(|(n, _b)| n.eq_ignore_ascii_case("X-ChatGPT"))
-        .map(|(_h, b)| b);
+    let do_chatgpt = || {
+        let key = state.chatgpt_key.as_deref()?;
 
-    let chatgpt_response = chatgpt_query.map(|query| chatgpt::do_one(&state.chatgpt_key, query));
+        let query = msg
+            .header_iter()
+            .map(|h| (h.name.as_str(), h.body.as_str()))
+            .find(|(n, _b)| n.eq_ignore_ascii_case("X-ChatGPT"))
+            .map(|(_h, b)| b)?;
+
+        Some(chatgpt::do_one(key, query))
+    };
+
+    let chatgpt_response = do_chatgpt();
 
     let mut add_header = |name, value| {
         let mut header = String::from(name);
@@ -433,12 +363,17 @@ unsafe extern "C" fn reply(
         header.push_str(value);
         header.push('\n');
 
-        let lump = opensips::add_lump_rpl(
-            msg,
-            header.as_mut_ptr(),
-            header.len().try_into().unwrap(),
-            opensips::LUMP_RPL_HDR | opensips::LUMP_RPL_NOFREE,
-        );
+        // SAFETY: `msg` is passed from OpenSIPS, the header is
+        // managed by Rust's `String`, and we instruct OpenSIPS to not
+        // free our memory.
+        let lump = unsafe {
+            opensips::add_lump_rpl(
+                msg,
+                header.as_mut_ptr(),
+                header.len().try_into().unwrap(),
+                opensips::LUMP_RPL_HDR | opensips::LUMP_RPL_NOFREE,
+            )
+        };
 
         !lump.is_null()
     };
@@ -465,7 +400,10 @@ unsafe extern "C" fn reply(
     let reason = &"OK".as_opensips_str();
     let tag = ptr::null_mut();
 
-    if reply(msg, code, reason, tag) == -1 {
+    // SAFETY: `msg` comes from OpenSIPS, `code` is an integer,
+    // `reason` is a static string, and `tag` is NULL. Nothing bad can
+    // happen with those values.
+    if unsafe { reply(msg, code, reason, tag) } == -1 {
         error!("failed to reply with 200");
         return -1;
     }
@@ -473,34 +411,15 @@ unsafe extern "C" fn reply(
     0
 }
 
-#[instrument(skip_all)]
-unsafe extern "C" fn test_str(
-    _msg: *mut opensips::sip_msg,
-    s1: *mut c_void,
-    s2: *mut c_void,
-    _arg3: *mut c_void,
-    _arg4: *mut c_void,
-    _arg5: *mut c_void,
-    _arg6: *mut c_void,
-    _arg7: *mut c_void,
-    _arg8: *mut c_void,
-) -> i32 {
+#[instrument]
+fn test_str(_: &mut opensips::sip_msg, s1: &str, s2: &str) -> i32 {
     info!("called");
-
-    let s1 = s1.cast::<opensips::str_>();
-    let s2 = s2.cast::<opensips::str_>();
-
-    let s1 = &*s1;
-    let s2 = &*s2;
-
-    let s1 = s1.as_str();
-    let s2 = s2.as_str();
 
     s1.contains(s2) as _
 }
 
 #[instrument(skip_all)]
-unsafe extern "C" fn control(
+extern "C" fn control(
     _params: *const opensips::mi_params_t,
     _async_hdl: *mut opensips::mi_handler,
 ) -> *mut opensips::mi_response_t {
